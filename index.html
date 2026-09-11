@@ -603,6 +603,24 @@
       tr.group-header:hover {
         background: var(--surface-2);
       }
+      tr.resumo-head td {
+        border-bottom: none;
+        padding: 14px 16px 4px;
+        font-family: "Sora", sans-serif;
+        font-weight: 700;
+        font-size: 13px;
+        color: var(--ink);
+      }
+      tr.resumo-head.big td {
+        padding-top: 18px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--ink-faint);
+      }
+      tr.resumo-head:first-child td {
+        padding-top: 0;
+      }
 
       .empty {
         padding: 28px 16px;
@@ -3521,92 +3539,127 @@
             id,
             children,
           });
+          const head = (label, big) => ({ kind: "head", label, big });
 
-          const entries = [
-            ...c.incomeOwn.map((i) =>
-              leaf("Receita", i.nome, i.valor, 1, i.id),
-            ),
-            ...c.fixedOwn.map((i) => leaf("Fixa", i.nome, -i.valor, -1, i.id)),
-            ...c.provisionsMonth.map((p) =>
-              leaf("Provisão", p.item.nome, -p.restante, -1, p.item.id),
-            ),
-            ...mergeTerceirosByPessoa(
-              c.incomeOtherByPessoa,
-              c.fixedThirdByPessoa,
-              c.instThirdByPessoa,
-            ).map((m) => {
-              const incomeChildren = m.incomeItens.map((i) => {
-                const info = i.totalParcelas
-                  ? installmentInfo(i, state.month)
-                  : null;
-                return {
-                  nome: i.nome + (info ? ` (${info.atual}/${info.total})` : ""),
-                  valor: i.valor,
-                  sign: 1,
-                  chip: receivedChip(i.id),
-                  id: i.id,
-                };
-              });
-              const fixedChildren = m.fixedItens.map((i) => ({
-                nome: i.nome,
+          const entradasPropria = c.incomeOwn.map((i) =>
+            leaf("Receita", i.nome, i.valor, 1, i.id),
+          );
+          const terceirosGroups = mergeTerceirosByPessoa(
+            c.incomeOtherByPessoa,
+            c.fixedThirdByPessoa,
+            c.instThirdByPessoa,
+          ).map((m) => {
+            const incomeChildren = m.incomeItens.map((i) => {
+              const info = i.totalParcelas
+                ? installmentInfo(i, state.month)
+                : null;
+              return {
+                nome: i.nome + (info ? ` (${info.atual}/${info.total})` : ""),
+                valor: i.valor,
+                sign: 1,
+                chip: receivedChip(i.id),
+                id: i.id,
+              };
+            });
+            const fixedChildren = m.fixedItens.map((i) => ({
+              nome: i.nome,
+              valor: -i.valor,
+              sign: -1,
+              chip: payChip(i.id),
+              id: i.id,
+            }));
+            const instChildren = m.instItens.map((i) => {
+              const info = i.__info;
+              return {
+                nome: i.nome + (info ? ` (${info.atual}/${info.total})` : ""),
                 valor: -i.valor,
                 sign: -1,
                 chip: payChip(i.id),
                 id: i.id,
-              }));
-              const instChildren = m.instItens.map((i) => {
-                const info = i.__info;
-                return {
-                  nome: i.nome + (info ? ` (${info.atual}/${info.total})` : ""),
-                  valor: -i.valor,
-                  sign: -1,
-                  chip: payChip(i.id),
-                  id: i.id,
-                };
-              });
-              const children = [
-                ...incomeChildren,
-                ...fixedChildren,
-                ...instChildren,
-              ];
-              const total = children.reduce((s, ch) => s + ch.valor, 0);
-              return group(
-                "terceiros:" + m.pessoa,
-                "Terceiros",
-                m.pessoa,
-                null,
-                total,
-                total >= 0 ? 1 : -1,
-                null,
-                children,
-              );
-            }),
-            ...c.instOwn.map((x) =>
-              leaf(
-                "Parcela",
-                x.item.nome + ` (${x.info.atual}/${x.info.total})`,
-                -x.item.valorParcela,
-                -1,
-                x.item.id,
-              ),
+              };
+            });
+            const children = [
+              ...incomeChildren,
+              ...fixedChildren,
+              ...instChildren,
+            ];
+            const total = children.reduce((s, ch) => s + ch.valor, 0);
+            return group(
+              "terceiros:" + m.pessoa,
+              "Terceiros",
+              m.pessoa,
+              null,
+              total,
+              total >= 0 ? 1 : -1,
+              null,
+              children,
+            );
+          });
+
+          const saidasDespesas = c.fixedOwn.map((i) =>
+            leaf("Fixa", i.nome, -i.valor, -1, i.id),
+          );
+          const saidasParcelamentos = c.instOwn.map((x) =>
+            leaf(
+              "Parcela",
+              x.item.nome + ` (${x.info.atual}/${x.info.total})`,
+              -x.item.valorParcela,
+              -1,
+              x.item.id,
             ),
-            ...c.cardsWithTx.map((x) =>
-              group(
-                "card:" + x.card.id,
-                "Cartão",
-                x.card.nome,
-                `${x.txs.length} lançamento${x.txs.length === 1 ? "" : "s"}`,
-                -x.total,
-                -1,
-                "card:" + x.card.id,
-                x.txs.map((t) => ({
-                  nome: t.tx.descricao + ` (${t.info.atual}/${t.info.total})`,
-                  valor: -t.tx.valorParcela,
-                  sign: -1,
-                  chip: situacaoChip(t.tx),
-                })),
-              ),
+          );
+          const saidasCartoes = c.cardsWithTx.map((x) =>
+            group(
+              "card:" + x.card.id,
+              "Cartão",
+              x.card.nome,
+              `${x.txs.length} lançamento${x.txs.length === 1 ? "" : "s"}`,
+              -x.total,
+              -1,
+              "card:" + x.card.id,
+              x.txs.map((t) => ({
+                nome: t.tx.descricao + ` (${t.info.atual}/${t.info.total})`,
+                valor: -t.tx.valorParcela,
+                sign: -1,
+                chip: situacaoChip(t.tx),
+              })),
             ),
+          );
+          const saidasProvisao = c.provisionsMonth.map((p) =>
+            leaf("Provisão", p.item.nome, -p.restante, -1, p.item.id),
+          );
+
+          // Cada seção ("Entradas"/"Saídas") e sub-seção só aparece se tiver
+          // algo dentro — evita cabeçalho seguido de nada.
+          const section = (label, items) =>
+            items.length ? [head(label), ...items] : [];
+          const itemCount =
+            entradasPropria.length +
+            terceirosGroups.length +
+            saidasDespesas.length +
+            saidasParcelamentos.length +
+            saidasCartoes.length +
+            saidasProvisao.length;
+          const entries = [
+            ...(entradasPropria.length || terceirosGroups.length
+              ? [
+                  head("Entradas", true),
+                  ...section("Própria", entradasPropria),
+                  ...section("Terceiros", terceirosGroups),
+                ]
+              : []),
+            ...(saidasDespesas.length ||
+            saidasParcelamentos.length ||
+            saidasCartoes.length ||
+            saidasProvisao.length
+              ? [
+                  head("Saídas", true),
+                  ...section("Despesas", saidasDespesas),
+                  ...section("Parcelamentos", saidasParcelamentos),
+                  ...section("Cartões", saidasCartoes),
+                  ...section("Provisão", saidasProvisao),
+                ]
+              : []),
           ];
 
           // Entradas usam o chip recebido/a receber; saídas usam pago/pendente. É só uma
@@ -3651,9 +3704,13 @@
             return chipFor(e);
           };
 
-          const body = entries.length
+          const body = itemCount
             ? entries
                 .map((e) => {
+                  if (e.kind === "head") {
+                    return `
+      <tr class="resumo-head${e.big ? " big" : ""}"><td colspan="3">${esc(e.label)}</td></tr>`;
+                  }
                   if (e.kind === "leaf") {
                     return `
       <tr>
@@ -3689,7 +3746,7 @@
           return `
       <div class="view-head"><h2>Resumo — ${monthLabel(state.month)}</h2></div>
       <div class="card">
-        <div class="card-head"><h3>Lançamentos do mês</h3><span class="meta">${entries.length} ${entries.length === 1 ? "item" : "itens"}</span></div>
+        <div class="card-head"><h3>Lançamentos do mês</h3><span class="meta">${itemCount} ${itemCount === 1 ? "item" : "itens"}</span></div>
         <div class="table-wrap"><table>
           <thead><tr><th>Item</th><th class="num">Valor</th><th>Situação</th></tr></thead>
           <tbody>${body}</tbody>
