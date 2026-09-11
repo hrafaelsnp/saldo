@@ -1118,6 +1118,11 @@
               required
             />
           </div>
+          <label class="check-row"
+            ><input id="rememberEmail" type="checkbox" /><span
+              >Lembrar meu e-mail neste navegador</span
+            ></label
+          >
           <div class="login-actions">
             <button id="signInBtn" class="btn-primary" type="submit">
               Entrar
@@ -2083,6 +2088,23 @@
           );
           const recoverySaveBtn = document.getElementById("recoverySaveBtn");
           const recoveryErrEl = document.getElementById("recoveryError");
+          const rememberEmailCheck = document.getElementById("rememberEmail");
+          const REMEMBER_EMAIL_KEY = "livro-caixa-remember-email";
+          // Lembrar e-mail: só o e-mail fica salvo (localStorage, só neste
+          // navegador) — a senha em si nunca é guardada aqui (senha em texto
+          // puro no localStorage é um risco real: qualquer bug de XSS futuro,
+          // ou só alguém com acesso físico ao navegador, teria acesso direto a
+          // ela). Pra quem quiser não digitar a senha toda vez, o próprio
+          // gerenciador de senhas do navegador já cobre isso (os campos abaixo
+          // já têm autocomplete="email"/"current-password" pra ativar aquele
+          // prompt nativo de "salvar senha?").
+          try {
+            const savedEmail = localStorage.getItem(REMEMBER_EMAIL_KEY);
+            if (savedEmail) {
+              emailInput.value = savedEmail;
+              if (rememberEmailCheck) rememberEmailCheck.checked = true;
+            }
+          } catch (e) {}
 
           function showError(msg) {
             errEl.hidden = false;
@@ -2151,11 +2173,20 @@
               password,
             });
             setBusy(false);
-            if (error)
+            if (error) {
               showError(
                 "Não foi possível entrar: " +
                   (error.message || "confira e-mail e senha."),
               );
+              return;
+            }
+            try {
+              if (rememberEmailCheck && rememberEmailCheck.checked) {
+                localStorage.setItem(REMEMBER_EMAIL_KEY, email);
+              } else {
+                localStorage.removeItem(REMEMBER_EMAIL_KEY);
+              }
+            } catch (e) {}
           });
 
           // Link dinâmico abaixo do form: em vez de sempre mostrar "Criar conta",
@@ -2795,6 +2826,17 @@
           if (n < 1 || n > total) return null;
           return { atual: n, total };
         }
+        // Lançamento de cartão recorrente (ex.: assinatura, mensalidade) — não
+        // tem qtd. de parcelas, vale todo mês a partir do "1ª parcela em" pra
+        // sempre (mesma ideia de fixedApplies, sem data de fim). Lançamentos
+        // sem o campo "recorrente" (todos os antigos) continuam do jeito de
+        // sempre: contados por parcela via installmentInfo.
+        function cardTxInfo(item, key) {
+          if (item.recorrente) {
+            return fixedApplies(item, key) ? { atual: null, total: null } : null;
+          }
+          return installmentInfo(item, key);
+        }
         // Um parcelamento fica "quitado" quando o número da parcela já passou do
         // total (diferente de "ainda não iniciado", que é antes da 1ª parcela) —
         // usado para sumir da tabela quando já foi pago por completo, mas continuar
@@ -2924,7 +2966,7 @@
           const cardsMonth = state.cards.map((c) => {
             const txs = state.cardTx
               .filter((t) => t.cardId === c.id)
-              .map((t) => ({ tx: t, info: installmentInfo(t, key) }))
+              .map((t) => ({ tx: t, info: cardTxInfo(t, key) }))
               .filter((x) => x.info);
             const total = txs.reduce(
               (s, x) => s + (Number(x.tx.valorParcela) || 0),
@@ -3146,9 +3188,22 @@
         }
         const AC_SOURCES = {
           "dl-receita": () => state.income.map((i) => i.nome),
-          "dl-despesa_fixa": () => state.fixed.map((i) => i.nome),
-          "dl-parcelamento": () => state.installments.map((i) => i.nome),
-          "dl-cartoes": () => state.cardTx.map((t) => t.descricao),
+          // Campos "Lançamento" de Despesas fixas/Parcelamentos/Cartões:
+          // também sugere os nomes cadastrados em Provisão — ajuda a digitar
+          // EXATAMENTE igual ao que está lá, que é o que a Provisão usa pra
+          // "casar" e descontar do valor provisionado (ver monthCompute).
+          "dl-despesa_fixa": () => [
+            ...state.fixed.map((i) => i.nome),
+            ...state.provisions.map((p) => p.nome),
+          ],
+          "dl-parcelamento": () => [
+            ...state.installments.map((i) => i.nome),
+            ...state.provisions.map((p) => p.nome),
+          ],
+          "dl-cartoes": () => [
+            ...state.cardTx.map((t) => t.descricao),
+            ...state.provisions.map((p) => p.nome),
+          ],
           // Campos "Terceiro": além dos nomes já usados no próprio módulo,
           // sempre inclui os nomes cadastrados em Settings > Compartilhamento
           // — ajuda a digitar EXATAMENTE igual ao que está lá, que é o que o
@@ -3582,7 +3637,7 @@
                 // Continua clicável: alterna TODOS os itens do grupo de uma vez
                 // (receita e despesa juntas), igual os botões normais.
                 const allIds = [...incomeIds, ...fixedIds];
-                return e.total >= 0
+                return e.valor >= 0
                   ? groupStatusChip(allIds, "recebido", "a receber")
                   : groupStatusChip(allIds, "pago", "pendente");
               }
@@ -4149,7 +4204,7 @@
           const cardsMonth = state.cards.map((c) => {
             const txs = state.cardTx
               .filter((t) => t.cardId === c.id)
-              .map((t) => ({ tx: t, info: installmentInfo(t, state.month) }))
+              .map((t) => ({ tx: t, info: cardTxInfo(t, state.month) }))
               .filter((x) => x.info);
             const total = txs.reduce(
               (s, x) => s + (Number(x.tx.valorParcela) || 0),
@@ -4168,21 +4223,27 @@
                       return `
         <tr>
           <td colspan="5" style="padding:0;">
-            <form class="add-row" data-editform="cardTx" data-editid="cardTx:${tx.id}">
+            <form class="add-row js-outros-form" data-editform="cardTx" data-editid="cardTx:${tx.id}">
               <input type="hidden" name="cardId" value="${tx.cardId}">
               <div class="field"><label>Lançamento</label><input type="text" name="descricao" value="${esc(tx.descricao)}" placeholder="Lançamento" data-ac="dl-cartoes" required></div>
-              <div class="field"><label>Valor da parcela</label><input class="money" type="text" inputmode="decimal" name="valorParcela" value="${tx.valorParcela}" required></div>
-              <div class="field"><label>Qtd. parcelas</label><input class="small" type="number" min="1" name="totalParcelas" value="${tx.totalParcelas || 1}" required></div>
-              <div class="field"><label>1ª parcela em</label><input class="month" type="month" name="mesInicio" value="${tx.mesInicio}" required></div>
+              <div class="field"><label class="js-valor-label">${tx.recorrente ? "Valor" : "Valor da parcela"}</label><input class="money" type="text" inputmode="decimal" name="valorParcela" value="${tx.valorParcela}" required></div>
+              <div class="field field-check"><label>Recorrente</label><label class="check-row"><input type="checkbox" class="js-recorrente-check" name="recorrente" value="1" ${tx.recorrente ? "checked" : ""}><span>Todo mês</span></label></div>
+              <div class="field js-parcelas-wrap" ${tx.recorrente ? "hidden" : ""}><label>Qtd. parcelas</label><input class="small" type="number" min="1" name="totalParcelas" value="${tx.totalParcelas || 1}"></div>
+              <div class="field js-mesInicio-wrap" ${tx.recorrente ? "hidden" : ""}><label>1ª parcela em</label><input class="month" type="month" name="mesInicio" value="${tx.mesInicio}" required></div>
               <button class="add" type="submit">Salvar</button>
               ${cancelBtn()}
             </form>
           </td>
         </tr>`;
+                    const parcelaTxt = tx.recorrente
+                      ? "recorrente"
+                      : info.total > 1
+                        ? `${info.atual}/${info.total}`
+                        : "à vista";
                     return `
         <tr class="${tx.situacao === "verificado" ? "row-verificado" : ""}">
           <td><span class="row-name">${esc(tx.descricao)}</span></td>
-          <td>${info.total > 1 ? `${info.atual}/${info.total}` : "à vista"}</td>
+          <td>${parcelaTxt}</td>
           <td class="num" ${tx.situacao === "verificado" ? "" : 'style="color:var(--bad);"'}>${money(tx.valorParcela)}</td>
           <td>${situacaoChip(tx)}</td>
           <td><div class="row-actions"><button class="icon-btn" data-editrow="cardTx:${tx.id}" title="Editar">✎</button><button class="icon-btn" data-del="cardTx:${tx.id}" title="Remover">✕</button></div></td>
@@ -4204,15 +4265,16 @@
           ${card.limite ? `<div class="progress"><div style="width:${pct}%; background:${pct > 90 ? "var(--bad)" : "var(--primary)"};"></div></div>` : ""}
         </div>
         <div class="table-wrap" style="margin-top:10px;"><table>
-          <thead><tr><th>Lançamento</th><th>Parcela</th><th class="num">Valor da parcela</th><th>Situação</th><th></th></tr></thead>
+          <thead><tr><th>Lançamento</th><th>Parcela</th><th class="num">Valor</th><th>Situação</th><th></th></tr></thead>
           <tbody>${txBody}</tbody>
         </table></div>
-        <form class="add-row" data-form="cardTx">
+        <form class="add-row js-outros-form" data-form="cardTx">
           <input type="hidden" name="cardId" value="${card.id}">
           <div class="field"><label>Lançamento</label><input type="text" name="descricao" placeholder="Lançamento" data-ac="dl-cartoes" required></div>
-          <div class="field"><label>Valor da parcela</label><input class="money" type="text" inputmode="decimal" name="valorParcela" placeholder="0,00" required></div>
-          <div class="field"><label>Qtd. parcelas</label><input class="small" type="number" min="1" name="totalParcelas" placeholder="1" value="1" required></div>
-          <div class="field"><label>1ª parcela em</label><input class="month" type="month" name="mesInicio" value="${state.month}" required></div>
+          <div class="field"><label class="js-valor-label">Valor da parcela</label><input class="money" type="text" inputmode="decimal" name="valorParcela" placeholder="0,00" required></div>
+          <div class="field field-check"><label>Recorrente</label><label class="check-row"><input type="checkbox" class="js-recorrente-check" name="recorrente" value="1"><span>Todo mês</span></label></div>
+          <div class="field js-parcelas-wrap"><label>Qtd. parcelas</label><input class="small" type="number" min="1" name="totalParcelas" placeholder="1" value="1"></div>
+          <div class="field js-mesInicio-wrap"><label>1ª parcela em</label><input class="month" type="month" name="mesInicio" value="${state.month}" required></div>
           <button class="add" type="submit">Adicionar</button>
         </form>
         <div style="padding:8px 16px 14px;"><button class="icon-btn" data-delcard="${card.id}" style="font-size:11px;">remover cartão</button></div>
@@ -4860,14 +4922,20 @@
               nome: fd.get("nome"),
               limite: parseMoney(fd.get("limite")) || 0,
             }),
-            cardTx: (fd) => ({
-              cardId: fd.get("cardId"),
-              descricao: fd.get("descricao"),
-              valorParcela: parseMoney(fd.get("valorParcela")),
-              totalParcelas: Number(fd.get("totalParcelas")) || 1,
-              mesInicio: fd.get("mesInicio"),
-              situacao: "aguardando",
-            }),
+            cardTx: (fd) => {
+              const recorrente = fd.get("recorrente") === "1";
+              return {
+                cardId: fd.get("cardId"),
+                descricao: fd.get("descricao"),
+                valorParcela: parseMoney(fd.get("valorParcela")),
+                totalParcelas: recorrente
+                  ? null
+                  : Number(fd.get("totalParcelas")) || 1,
+                mesInicio: fd.get("mesInicio"),
+                recorrente,
+                situacao: "aguardando",
+              };
+            },
             provisao: (fd) => ({
               nome: fd.get("nome"),
               valor: parseMoney(fd.get("valor")),
@@ -4990,13 +5058,19 @@
             installments: forms.installments,
             // não reaproveita forms.cardTx aqui: aquele sempre reseta a situação para
             // "aguardando" na criação, o que apagaria um "verificado" já marcado.
-            cardTx: (fd) => ({
-              cardId: fd.get("cardId"),
-              descricao: fd.get("descricao"),
-              valorParcela: parseMoney(fd.get("valorParcela")),
-              totalParcelas: Number(fd.get("totalParcelas")) || 1,
-              mesInicio: fd.get("mesInicio"),
-            }),
+            cardTx: (fd) => {
+              const recorrente = fd.get("recorrente") === "1";
+              return {
+                cardId: fd.get("cardId"),
+                descricao: fd.get("descricao"),
+                valorParcela: parseMoney(fd.get("valorParcela")),
+                totalParcelas: recorrente
+                  ? null
+                  : Number(fd.get("totalParcelas")) || 1,
+                mesInicio: fd.get("mesInicio"),
+                recorrente,
+              };
+            },
             provisao: (fd) => ({
               nome: fd.get("nome"),
               valor: parseMoney(fd.get("valor")),
