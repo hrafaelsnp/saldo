@@ -609,7 +609,7 @@
         font-family: "Sora", sans-serif;
         font-weight: 700;
         font-size: 13px;
-        color: var(--ink);
+        color: var(--ink-faint);
       }
       tr.resumo-head.big td {
         padding-top: 18px;
@@ -3629,6 +3629,13 @@
             leaf("Provisão", p.item.nome, -p.restante, -1, p.item.id),
           );
 
+          // Terceiros positivo (ela te deve mais do que você deve pra ela) vai
+          // pra Entradas; negativo (você deve mais pra ela) vai pra Saídas,
+          // logo depois de Cartões — cada grupo de pessoa entra num lado ou no
+          // outro conforme o próprio saldo líquido dela, não os dois juntos.
+          const terceirosEntradas = terceirosGroups.filter((g) => g.valor >= 0);
+          const terceirosSaidas = terceirosGroups.filter((g) => g.valor < 0);
+
           // Cada seção ("Entradas"/"Saídas") e sub-seção só aparece se tiver
           // algo dentro — evita cabeçalho seguido de nada.
           const section = (label, items) =>
@@ -3641,22 +3648,24 @@
             saidasCartoes.length +
             saidasProvisao.length;
           const entries = [
-            ...(entradasPropria.length || terceirosGroups.length
+            ...(entradasPropria.length || terceirosEntradas.length
               ? [
                   head("Entradas", true),
                   ...section("Própria", entradasPropria),
-                  ...section("Terceiros", terceirosGroups),
+                  ...section("Terceiros", terceirosEntradas),
                 ]
               : []),
             ...(saidasDespesas.length ||
             saidasParcelamentos.length ||
             saidasCartoes.length ||
+            terceirosSaidas.length ||
             saidasProvisao.length
               ? [
                   head("Saídas", true),
                   ...section("Despesas", saidasDespesas),
                   ...section("Parcelamentos", saidasParcelamentos),
                   ...section("Cartões", saidasCartoes),
+                  ...section("Terceiros", terceirosSaidas),
                   ...section("Provisão", saidasProvisao),
                 ]
               : []),
