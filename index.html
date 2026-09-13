@@ -308,6 +308,60 @@
         color: var(--ink);
         background: var(--surface-2);
       }
+      .rascunho-toggle {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--ink-muted);
+        border-radius: 8px;
+        padding: 6px 10px;
+        cursor: pointer;
+        font-size: 12px;
+        user-select: none;
+      }
+      .rascunho-toggle:hover {
+        color: var(--ink);
+        background: var(--surface-2);
+      }
+      .rascunho-toggle input {
+        cursor: pointer;
+      }
+      td.rascunho-cell,
+      th.rascunho-cell {
+        width: 28px;
+        text-align: center;
+        padding-left: 12px;
+        padding-right: 0;
+      }
+      td.rascunho-cell input[type="checkbox"] {
+        width: 15px;
+        height: 15px;
+        cursor: pointer;
+      }
+      table.rascunho-mode tr.group-child td:first-child {
+        padding-left: 12px;
+      }
+      table.rascunho-mode tr.group-child td:nth-child(2) {
+        padding-left: 34px;
+      }
+      .rascunho-value-input {
+        width: 100px;
+        text-align: right;
+        font-family: "IBM Plex Mono";
+        font-variant-numeric: tabular-nums;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: inherit;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 13px;
+      }
+      .rascunho-value-input:focus {
+        outline: none;
+        border-color: var(--primary);
+      }
       .theme-toggle {
         width: 30px;
         height: 30px;
@@ -338,6 +392,19 @@
         grid-template-columns: repeat(4, 1fr);
         gap: 14px;
         margin-bottom: 26px;
+      }
+      /* Modo rascunho no Resumo do mês: dash fica fixo no topo (colado no
+         topbar, que já é sticky) e só os lançamentos rolam por baixo — assim
+         dá pra ver o recálculo do dash enquanto marca/edita itens mais abaixo
+         na lista. --topbar-h é medido em JS (renderTopbar) porque a altura do
+         topbar varia entre desktop/mobile. */
+      .tiles.tiles-sticky {
+        position: sticky;
+        top: var(--topbar-h, 64px);
+        z-index: 4;
+        background: var(--bg);
+        padding: 10px 0 14px;
+        margin-top: -10px;
       }
       .tile {
         background: var(--surface);
@@ -1306,6 +1373,9 @@
               ☾
             </button>
             <button class="today-btn" id="gotoToday">hoje</button>
+            <label class="rascunho-toggle" id="rascunhoWrap" title="Simular exclusão de lançamentos do cálculo do mês, sem alterá-los">
+              <input type="checkbox" id="rascunhoToggle" />rascunho
+            </label>
           </div>
         </div>
         <div id="content">
@@ -1390,6 +1460,44 @@
           else if (s.includes(",")) s = s.replace(",", ".");
           const n = Number(s);
           return isNaN(n) ? 0 : n;
+        }
+        // Modo rascunho: o valor digitado por item (state.rascunhoValores,
+        // sempre um valor absoluto positivo) substitui "mag" só pra fins de
+        // simulação (cálculo do dash e exibição no Resumo do mês) — nunca
+        // altera o lançamento real. `mag` é sempre o valor absoluto original
+        // (i.valor, valorParcela, restante...); o sinal é aplicado por quem
+        // chama, fora daqui.
+        function draftMagnitude(id, mag) {
+          if (!id || !state.rascunho) return mag;
+          const ov = state.rascunhoValores[id];
+          return ov != null ? Math.abs(parseMoney(ov)) : mag;
+        }
+        // Checkbox de um lançamento em modo rascunho: marcar zera o valor
+        // exibido/editável dele (state.rascunhoValores = "0"), guardando o que
+        // estava lá (editado ou não) em rascunhoPrevValores; desmarcar devolve
+        // esse valor guardado. O próprio state.rascunhoOut[id] já faz o item
+        // valer 0 no cálculo do dash (ver val() em monthCompute) — aqui só
+        // sincroniza a exibição/edição com essa mesma exclusão.
+        function setRascunhoOut(id, checked) {
+          if (!id) return;
+          if (checked) {
+            state.rascunhoOut[id] = true;
+            state.rascunhoPrevValores[id] = state.rascunhoValores[id];
+            state.rascunhoValores[id] = "0";
+          } else {
+            delete state.rascunhoOut[id];
+            if (
+              Object.prototype.hasOwnProperty.call(
+                state.rascunhoPrevValores,
+                id,
+              )
+            ) {
+              const prev = state.rascunhoPrevValores[id];
+              if (prev == null) delete state.rascunhoValores[id];
+              else state.rascunhoValores[id] = prev;
+              delete state.rascunhoPrevValores[id];
+            }
+          }
         }
         // Rateio de despesa fixa: quando marcado, o valor digitado é o valor TOTAL
         // da despesa (ex.: conta de condomínio de R$500 dividida em 5 cotas), e o
@@ -1730,6 +1838,10 @@
           navOpen: {},
           resumoOpen: {},
           pessoaGroupOpen: {},
+          rascunho: false,
+          rascunhoOut: {},
+          rascunhoValores: {},
+          rascunhoPrevValores: {},
           tabs: {},
           editing: null,
           undo: null,
@@ -2922,6 +3034,14 @@
         }
 
         function monthCompute(key) {
+          // Modo rascunho: cada item marcado (state.rascunhoOut) some do cálculo
+          // do dash e de "Falta pagar"; cada item com valor editado
+          // (state.rascunhoValores, ver draftMagnitude) entra no cálculo com o
+          // valor simulado em vez do real. Nenhum dos dois altera o lançamento
+          // — só a exibição/cálculo no Resumo do mês.
+          const draftOut = state.rascunho ? state.rascunhoOut : {};
+          const val = (id, v) => (id && draftOut[id] ? 0 : draftMagnitude(id, v));
+
           // Entradas: receita própria (salário, ticket, auxílio...) + "Outros" — contribuições
           // de terceiros (Claudia, Fred, Relviski...), que na planilha é a soma de uma
           // sub-tabela por pessoa, não um valor solto.
@@ -2933,11 +3053,11 @@
           );
           const incomeOtherByPessoa = groupByPessoa(incomeOther);
           const totalIncomeOwn = incomeOwn.reduce(
-            (s, i) => s + (Number(i.valor) || 0),
+            (s, i) => s + val(i.id, Number(i.valor) || 0),
             0,
           );
           const totalIncomeOther = incomeOther.reduce(
-            (s, i) => s + (Number(i.valor) || 0),
+            (s, i) => s + val(i.id, Number(i.valor) || 0),
             0,
           );
           const totalIncome = totalIncomeOwn + totalIncomeOther;
@@ -2950,11 +3070,11 @@
           const fixedThird = fixedAll.filter((i) => i.pessoa);
           const fixedThirdByPessoa = groupByPessoa(fixedThird);
           const totalFixed = fixedOwn.reduce(
-            (s, i) => s + (Number(i.valor) || 0),
+            (s, i) => s + val(i.id, Number(i.valor) || 0),
             0,
           );
           const totalThirdParty = fixedThird.reduce(
-            (s, i) => s + (Number(i.valor) || 0),
+            (s, i) => s + val(i.id, Number(i.valor) || 0),
             0,
           );
 
@@ -2962,7 +3082,7 @@
             .map((i) => ({ item: i, info: installmentInfo(i, key) }))
             .filter((x) => x.info);
           const totalInst = instItems.reduce(
-            (s, x) => s + (Number(x.item.valorParcela) || 0),
+            (s, x) => s + val(x.item.id, Number(x.item.valorParcela) || 0),
             0,
           );
           // Parcelamento com Terceiro (ex.: espelhado de um compartilhamento) —
@@ -2987,7 +3107,7 @@
               .map((t) => ({ tx: t, info: cardTxInfo(t, key) }))
               .filter((x) => x.info);
             const total = txs.reduce(
-              (s, x) => s + (Number(x.tx.valorParcela) || 0),
+              (s, x) => s + val(x.tx.id, Number(x.tx.valorParcela) || 0),
               0,
             );
             return { card: c, txs, total };
@@ -3032,15 +3152,18 @@
               return { item: p, consumido, restante };
             });
           const totalProvisoes = provisionsMonth.reduce(
-            (s, p) => s + p.restante,
+            (s, p) => s + val(p.item.id, p.restante),
             0,
           );
 
           const payable = [
-            ...fixedOwn.map((i) => ({ id: i.id, valor: Number(i.valor) || 0 })),
+            ...fixedOwn.map((i) => ({
+              id: i.id,
+              valor: val(i.id, Number(i.valor) || 0),
+            })),
             ...instOwn.map((x) => ({
               id: x.item.id,
-              valor: Number(x.item.valorParcela) || 0,
+              valor: val(x.item.id, Number(x.item.valorParcela) || 0),
             })),
             ...cardsWithTx.map((c) => ({
               id: "card:" + c.card.id,
@@ -3048,7 +3171,7 @@
             })),
             ...provisionsMonth.map((p) => ({
               id: p.item.id,
-              valor: p.restante,
+              valor: val(p.item.id, p.restante),
             })),
           ];
           const pendente = payable.filter((p) => !pagamentos[p.id]);
@@ -3070,7 +3193,7 @@
             const unpaid = (itens) =>
               itens
                 .filter((i) => !pagamentos[i.id])
-                .reduce((s, i) => s + (Number(i.valor) || 0), 0);
+                .reduce((s, i) => s + val(i.id, Number(i.valor) || 0), 0);
             const net =
               unpaid(m.incomeItens) - unpaid(m.fixedItens) - unpaid(m.instItens);
             if (net < 0) terceirosPendente += -net;
@@ -3421,11 +3544,24 @@
           document.getElementById("viewCaption").textContent = sec
             ? sec.label
             : "";
+          document.getElementById("rascunhoToggle").checked = !!state.rascunho;
+          document.getElementById("rascunhoWrap").hidden =
+            state.section !== "resumo";
+          // Altura real do topbar (varia entre desktop/mobile) — usada como
+          // offset do dash fixo em modo rascunho (ver .tiles.tiles-sticky).
+          document.documentElement.style.setProperty(
+            "--topbar-h",
+            document.getElementById("topbar").offsetHeight + "px",
+          );
         }
 
         function renderTiles() {
           const c = monthCompute(state.month);
           const tiles = document.getElementById("tiles");
+          tiles.classList.toggle(
+            "tiles-sticky",
+            !!state.rascunho && state.section === "resumo",
+          );
           tiles.innerHTML = `
       <div class="tile good"><div class="label">Entradas</div><div class="value">${money(c.totalIncome)}</div><div class="sub">própria ${money(c.totalIncomeOwn)} · terceiros ${money(c.totalIncomeOther)}</div></div>
       <div class="tile bad"><div class="label">Saídas</div><div class="value">${money(c.totalSaidas)}</div><div class="sub">fixas ${money(c.totalFixed)} · parcelas ${money(c.totalInst)} · terceiros ${money(c.totalThirdParty)} · cartões ${money(c.totalCards)} · provisão ${money(c.totalProvisoes)}</div></div>
@@ -3583,7 +3719,13 @@
               ...fixedChildren,
               ...instChildren,
             ];
-            const total = children.reduce((s, ch) => s + ch.valor, 0);
+            // Total do grupo já considera valores editados em modo rascunho
+            // (ver draftMagnitude) — cada filho tem sinal próprio (ch.sign),
+            // então só a magnitude é substituída, o sinal é preservado.
+            const total = children.reduce(
+              (s, ch) => s + ch.sign * draftMagnitude(ch.id, Math.abs(ch.valor)),
+              0,
+            );
             return group(
               "terceiros:" + m.pessoa,
               "Terceiros",
@@ -3622,6 +3764,7 @@
                 valor: -t.tx.valorParcela,
                 sign: -1,
                 chip: situacaoChip(t.tx),
+                id: t.tx.id,
               })),
             ),
           );
@@ -3713,51 +3856,87 @@
             return chipFor(e);
           };
 
+          // Modo rascunho: acrescenta uma coluna de checkbox antes de cada
+          // lançamento — marcar um item some do cálculo do dash (ver
+          // monthCompute/val), sem alterar o lançamento em si. Grupo (cartão,
+          // terceiros) usa data-rascunhogroup pra marcar todos os filhos de
+          // uma vez, igual o botão de status agregado já faz para pagamentos.
+          const draftMode = !!state.rascunho;
+          const colspan = draftMode ? 4 : 3;
+          const draftCell = (id) =>
+            id
+              ? `<td class="rascunho-cell"><input type="checkbox" data-rascunho="${esc(id)}" ${state.rascunhoOut[id] ? "checked" : ""}></td>`
+              : `<td class="rascunho-cell"></td>`;
+          const draftGroupCell = (ids) => {
+            if (!ids.length) return `<td class="rascunho-cell"></td>`;
+            const allOn = ids.every((id) => state.rascunhoOut[id]);
+            return `<td class="rascunho-cell"><input type="checkbox" data-rascunhogroup="${ids.join(",")}" ${allOn ? "checked" : ""}></td>`;
+          };
+          // Em modo rascunho todo lançamento com id (leaf ou filho de grupo)
+          // fica editável — o campo simula um novo valor absoluto pra ele, sem
+          // alterar o lançamento real (ver draftMagnitude em monthCompute).
+          // Marcado no checkbox, o campo fica travado em 0 (ver setRascunhoOut)
+          // — desmarcar devolve o valor que estava editado antes de marcar.
+          // Itens sem id (não deveria existir, mas por segurança) continuam
+          // mostrando o valor fixo, com o sinal original preservado.
+          const draftValueCell = (item) =>
+            item.id
+              ? `<input type="text" inputmode="decimal" class="rascunho-value-input" data-rascunhovalue="${esc(item.id)}" value="${esc(state.rascunhoValores[item.id] != null ? state.rascunhoValores[item.id] : Math.abs(item.valor))}" ${state.rascunhoOut[item.id] ? "disabled" : ""}>`
+              : money(item.valor);
+
           const body = itemCount
             ? entries
                 .map((e) => {
                   if (e.kind === "head") {
                     return `
-      <tr class="resumo-head${e.big ? " big" : ""}"><td colspan="3">${esc(e.label)}</td></tr>`;
+      <tr class="resumo-head${e.big ? " big" : ""}"><td colspan="${colspan}">${esc(e.label)}</td></tr>`;
                   }
                   if (e.kind === "leaf") {
+                    const valorCell = draftMode ? draftValueCell(e) : money(e.valor);
                     return `
       <tr>
+        ${draftMode ? draftCell(e.id) : ""}
         <td><span class="row-name">${esc(e.nome)}</span><div class="row-cat">${esc(e.tipo)}</div></td>
-        <td class="num" style="color:${e.sign > 0 ? "var(--good)" : "var(--bad)"}">${money(e.valor)}</td>
+        <td class="num" style="color:${e.sign > 0 ? "var(--good)" : "var(--bad)"}">${valorCell}</td>
         <td>${chipFor(e)}</td>
       </tr>`;
                   }
                   const isOpen = !!state.resumoOpen[e.key];
+                  const groupIds = e.children.map((ch) => ch.id).filter(Boolean);
                   const header = `
       <tr class="group-header">
+        ${draftMode ? draftGroupCell(groupIds) : ""}
         <td><button class="group-toggle" data-resumogroup="${esc(e.key)}"><span class="caret">${isOpen ? "▾" : "▸"}</span><span class="row-name">${esc(e.nome)}</span></button><div class="row-cat">${esc(e.tipo)}${e.cat ? " · " + esc(e.cat) : ""}</div></td>
         <td class="num" style="color:${e.sign > 0 ? "var(--good)" : "var(--bad)"}">${money(e.valor)}</td>
         <td>${groupChip(e)}</td>
       </tr>`;
                   const children = isOpen
                     ? e.children
-                        .map(
-                          (ch) => `
+                        .map((ch) => {
+                          const chValorCell = draftMode
+                            ? draftValueCell(ch)
+                            : money(ch.valor);
+                          return `
       <tr class="group-child">
+        ${draftMode ? draftCell(ch.id) : ""}
         <td><span class="row-name">${esc(ch.nome)}</span></td>
-        <td class="num" style="color:${ch.sign > 0 ? "var(--good)" : "var(--bad)"}">${money(ch.valor)}</td>
+        <td class="num" style="color:${ch.sign > 0 ? "var(--good)" : "var(--bad)"}">${chValorCell}</td>
         <td>${ch.chip || ""}</td>
-      </tr>`,
-                        )
+      </tr>`;
+                        })
                         .join("")
                     : "";
                   return header + children;
                 })
                 .join("")
-            : `<tr><td colspan="3"><div class="empty"><b>Nada lançado ainda para ${monthLabel(state.month)}</b>Cadastre receitas, despesas fixas ou parcelamentos nas outras seções — eles aparecem aqui automaticamente.</div></td></tr>`;
+            : `<tr><td colspan="${colspan}"><div class="empty"><b>Nada lançado ainda para ${monthLabel(state.month)}</b>Cadastre receitas, despesas fixas ou parcelamentos nas outras seções — eles aparecem aqui automaticamente.</div></td></tr>`;
 
           return `
       <div class="view-head"><h2>Resumo — ${monthLabel(state.month)}</h2></div>
       <div class="card">
         <div class="card-head"><h3>Lançamentos do mês</h3><span class="meta">${itemCount} ${itemCount === 1 ? "item" : "itens"}</span></div>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Item</th><th class="num">Valor</th><th>Situação</th></tr></thead>
+        <div class="table-wrap"><table class="${draftMode ? "rascunho-mode" : ""}">
+          <thead><tr>${draftMode ? '<th class="rascunho-cell"></th>' : ""}<th>Item</th><th class="num">Valor</th><th>Situação</th></tr></thead>
           <tbody>${body}</tbody>
         </table></div>
       </div>`;
@@ -4580,6 +4759,26 @@
                 .update({ situacao: novo });
             });
           });
+          root.querySelectorAll("[data-rascunho]").forEach((cb) => {
+            cb.addEventListener("change", () => {
+              setRascunhoOut(cb.dataset.rascunho, cb.checked);
+              renderAll();
+            });
+          });
+          root.querySelectorAll("[data-rascunhovalue]").forEach((inp) => {
+            inp.addEventListener("click", (e) => e.stopPropagation());
+            inp.addEventListener("change", () => {
+              state.rascunhoValores[inp.dataset.rascunhovalue] = inp.value;
+              renderAll();
+            });
+          });
+          root.querySelectorAll("[data-rascunhogroup]").forEach((cb) => {
+            cb.addEventListener("change", () => {
+              const ids = cb.dataset.rascunhogroup.split(",").filter(Boolean);
+              ids.forEach((id) => setRascunhoOut(id, cb.checked));
+              renderAll();
+            });
+          });
           root.querySelectorAll("[data-resumogroup]").forEach((btn) => {
             btn.addEventListener("click", () => {
               const key = btn.dataset.resumogroup;
@@ -5314,6 +5513,12 @@
           };
         }
 
+        window.addEventListener("resize", () => {
+          document.documentElement.style.setProperty(
+            "--topbar-h",
+            document.getElementById("topbar").offsetHeight + "px",
+          );
+        });
         document.getElementById("prevMonth").addEventListener("click", () => {
           state.month = addMonths(state.month, -1);
           watchMonth(state.month);
@@ -5324,6 +5529,17 @@
           watchMonth(state.month);
           renderAll();
         });
+        document
+          .getElementById("rascunhoToggle")
+          .addEventListener("change", (e) => {
+            state.rascunho = e.target.checked;
+            if (!state.rascunho) {
+              state.rascunhoOut = {};
+              state.rascunhoValores = {};
+              state.rascunhoPrevValores = {};
+            }
+            renderAll();
+          });
         document.getElementById("gotoToday").addEventListener("click", () => {
           state.month = todayKey();
           watchMonth(state.month);
