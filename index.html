@@ -1443,6 +1443,16 @@
         function money(n) {
           return fmtBRL.format(Number(n) || 0);
         }
+        // Mesmo padrão BR do money(), mas sem o "R$" — usado no valor exibido
+        // dentro de um <input> editável (ex.: campos do modo rascunho), onde só
+        // o número faz sentido. Sempre com 2 casas e vírgula decimal (999,00),
+        // não importa como o número foi digitado ou gerado internamente.
+        function formatMoneyInput(n) {
+          return (Number(n) || 0).toLocaleString("pt-BR", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          });
+        }
         // Aceita valores digitados tanto com vírgula (padrão BR: 15,50 ou 1.234,56)
         // quanto com ponto (15.50) como separador decimal.
         function parseMoney(v) {
@@ -3882,10 +3892,12 @@
           // — desmarcar devolve o valor que estava editado antes de marcar.
           // Itens sem id (não deveria existir, mas por segurança) continuam
           // mostrando o valor fixo, com o sinal original preservado.
-          const draftValueCell = (item) =>
-            item.id
-              ? `<input type="text" inputmode="decimal" class="rascunho-value-input" data-rascunhovalue="${esc(item.id)}" value="${esc(state.rascunhoValores[item.id] != null ? state.rascunhoValores[item.id] : Math.abs(item.valor))}" ${state.rascunhoOut[item.id] ? "disabled" : ""}>`
-              : money(item.valor);
+          const draftValueCell = (item) => {
+            if (!item.id) return money(item.valor);
+            const raw = state.rascunhoValores[item.id];
+            const numeric = raw != null ? parseMoney(raw) : Math.abs(item.valor);
+            return `<input type="text" inputmode="decimal" class="rascunho-value-input" data-rascunhovalue="${esc(item.id)}" value="${esc(formatMoneyInput(numeric))}" ${state.rascunhoOut[item.id] ? "disabled" : ""}>`;
+          };
 
           const body = itemCount
             ? entries
@@ -3956,7 +3968,7 @@
         <form class="add-row js-income-form" data-editform="income" data-editid="income:${i.id}">
           <div class="field"><label>Lançamento</label><input type="text" name="nome" value="${esc(i.nome)}" placeholder="Lançamento" data-ac="dl-receita" required></div>
           <div class="field field-check"><label>Tipo</label><label class="check-row"><input type="checkbox" class="js-tipo-check" name="tipoValor" value="bruto" ${i.tipoValor === "liquido" ? "" : "checked"}><span>Salário bruto</span></label></div>
-          <div class="field"><label>Valor</label><input class="money js-valor" type="text" inputmode="decimal" name="valor" value="${i.tipoValor === "liquido" ? i.valor : i.valorBruto || 0}" required></div>
+          <div class="field"><label>Valor</label><input class="money js-valor" type="text" inputmode="decimal" name="valor" value="${formatMoneyInput(i.tipoValor === "liquido" ? i.valor : i.valorBruto || 0)}" required></div>
           <div class="field js-dep-wrap" ${i.tipoValor === "liquido" ? "hidden" : ""}><label>Dependentes</label><input class="small js-dep-input" type="number" step="1" min="0" name="dependentes" value="${i.dependentes || 0}"></div>
           ${editScopeRadios()}
           <button class="add" type="submit">Salvar</button>
@@ -4015,7 +4027,7 @@
           <form class="add-row" data-editform="incomeOther" data-editid="incomeOther:${i.id}">
             <div class="field"><label>Terceiro</label><input type="text" name="pessoa" value="${esc(i.pessoa)}" placeholder="Terceiro" data-ac="dl-pessoa-receita" required></div>
             <div class="field"><label>Lançamento</label><input type="text" name="nome" value="${esc(i.nome)}" placeholder="Lançamento" data-ac="dl-receita" required></div>
-            <div class="field"><label>${i.totalParcelas ? "Valor da parcela" : "Valor"}</label><input class="money" type="text" inputmode="decimal" name="valor" value="${i.valor}" required></div>
+            <div class="field"><label>${i.totalParcelas ? "Valor da parcela" : "Valor"}</label><input class="money" type="text" inputmode="decimal" name="valor" value="${formatMoneyInput(i.valor)}" required></div>
             ${i.totalParcelas ? "" : editScopeRadios()}
             <button class="add" type="submit">Salvar</button>
             ${cancelBtn()}
@@ -4105,7 +4117,7 @@
         <form class="add-row js-rateio-form" data-editform="${kind}" data-editid="${kind}:${i.id}">
           ${extraField ? `<div class="field"><label>Terceiro</label><input type="text" name="pessoa" value="${esc(i.pessoa)}" placeholder="Terceiro" data-ac="dl-pessoa-despesa" required></div>` : ""}
           <div class="field"><label>Lançamento</label><input type="text" name="nome" value="${esc(i.nome)}" placeholder="Lançamento" data-ac="dl-despesa_fixa" required></div>
-          <div class="field"><label class="js-valor-label">${rateio ? "Valor total" : "Valor"}</label><input class="money js-valor" type="text" inputmode="decimal" name="valor" value="${rateio ? i.valorTotal : i.valor}" required></div>
+          <div class="field"><label class="js-valor-label">${rateio ? "Valor total" : "Valor"}</label><input class="money js-valor" type="text" inputmode="decimal" name="valor" value="${formatMoneyInput(rateio ? i.valorTotal : i.valor)}" required></div>
           <div class="field field-check"><label>Rateio</label><label class="check-row"><input type="checkbox" class="js-rateio-check" name="rateio" value="1" ${rateio ? "checked" : ""}><span>Dividir</span></label></div>
           <div class="field js-cotasTotais-wrap" ${rateio ? "" : "hidden"}><label>Cotas Totais</label><input class="small" type="number" min="1" step="1" name="cotasTotais" value="${rateio ? i.cotasTotais : ""}"></div>
           <div class="field js-cotasPagas-wrap" ${rateio ? "" : "hidden"}><label>Minhas Cotas</label><input class="small" type="number" min="0" step="1" name="cotasPagas" value="${rateio ? i.cotasPagas : ""}"></div>
@@ -4144,7 +4156,7 @@
       <td colspan="3" style="padding:0;">
         <form class="add-row" data-editform="provisao" data-editid="provisao:${i.id}">
           <div class="field"><label>Lançamento</label><input type="text" name="nome" value="${esc(i.nome)}" placeholder="Lançamento" data-ac="dl-provisao-lancamento" required></div>
-          <div class="field"><label>Valor Provisionado</label><input class="money" type="text" inputmode="decimal" name="valor" value="${i.valor}" required></div>
+          <div class="field"><label>Valor Provisionado</label><input class="money" type="text" inputmode="decimal" name="valor" value="${formatMoneyInput(i.valor)}" required></div>
           ${editScopeRadios()}
           <button class="add" type="submit">Salvar</button>
           ${cancelBtn()}
@@ -4328,7 +4340,7 @@
         <form class="add-row" data-editform="installments" data-editid="installments:${i.id}">
           ${withPessoa ? `<div class="field"><label>Terceiro</label><input type="text" name="pessoa" value="${esc(i.pessoa || "")}" placeholder="Terceiro" data-ac="dl-pessoa-parcelamento" required></div>` : ""}
           <div class="field"><label>Lançamento</label><input type="text" name="nome" value="${esc(i.nome)}" placeholder="Lançamento" data-ac="dl-parcelamento" required></div>
-          <div class="field"><label>Valor da parcela</label><input class="money" type="text" inputmode="decimal" name="valorParcela" value="${i.valorParcela}" required></div>
+          <div class="field"><label>Valor da parcela</label><input class="money" type="text" inputmode="decimal" name="valorParcela" value="${formatMoneyInput(i.valorParcela)}" required></div>
           <div class="field"><label>Qtd. parcelas</label><input class="small" type="number" min="1" name="totalParcelas" value="${i.totalParcelas}" required></div>
           <div class="field"><label>1ª parcela em</label><input class="month" type="month" name="mesInicio" value="${i.mesInicio}" required></div>
           <button class="add" type="submit">Salvar</button>
@@ -4474,7 +4486,7 @@
             <form class="add-row js-outros-form" data-editform="cardTx" data-editid="cardTx:${tx.id}">
               <input type="hidden" name="cardId" value="${tx.cardId}">
               <div class="field"><label>Lançamento</label><input type="text" name="descricao" value="${esc(tx.descricao)}" placeholder="Lançamento" data-ac="dl-cartoes" required></div>
-              <div class="field"><label class="js-valor-label">${tx.recorrente ? "Valor" : "Valor da parcela"}</label><input class="money" type="text" inputmode="decimal" name="valorParcela" value="${tx.valorParcela}" required></div>
+              <div class="field"><label class="js-valor-label">${tx.recorrente ? "Valor" : "Valor da parcela"}</label><input class="money" type="text" inputmode="decimal" name="valorParcela" value="${formatMoneyInput(tx.valorParcela)}" required></div>
               <div class="field field-check"><label>Recorrente</label><label class="check-row"><input type="checkbox" class="js-recorrente-check" name="recorrente" value="1" ${tx.recorrente ? "checked" : ""}><span>Todo mês</span></label></div>
               <div class="field js-parcelas-wrap" ${tx.recorrente ? "hidden" : ""}><label>Qtd. parcelas</label><input class="small" type="number" min="1" name="totalParcelas" value="${tx.totalParcelas || 1}"></div>
               <div class="field js-mesInicio-wrap" ${tx.recorrente ? "hidden" : ""}><label>1ª parcela em</label><input class="month" type="month" name="mesInicio" value="${tx.mesInicio}" required></div>
