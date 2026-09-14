@@ -1069,6 +1069,22 @@
         #topbar {
           padding: 12px 14px;
         }
+        /* Barra superior enxuta no mobile: some o nome da tela e o botão
+           "hoje" (a tela toda já é pequena pra caber tudo confortável), e o
+           rascunho vira só o checkbox — sem o texto "rascunho" ao lado — pra
+           ocupar o mínimo de espaço possível. */
+        .top-caption {
+          display: none;
+        }
+        .today-btn {
+          display: none;
+        }
+        .rascunho-toggle {
+          padding: 6px;
+        }
+        .rascunho-label {
+          display: none;
+        }
       }
 
       /* ---------- Login (e-mail / Supabase) ---------- */
@@ -1367,7 +1383,7 @@
             </button>
             <button class="today-btn" id="gotoToday">hoje</button>
             <label class="rascunho-toggle" id="rascunhoWrap" title="Simular exclusão de lançamentos do cálculo do mês, sem alterá-los">
-              <input type="checkbox" id="rascunhoToggle" />rascunho
+              <input type="checkbox" id="rascunhoToggle" /><span class="rascunho-label">rascunho</span>
             </label>
           </div>
         </div>
