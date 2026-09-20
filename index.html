@@ -3164,10 +3164,18 @@
           const provisionsMonth = state.provisions
             .filter((p) => fixedApplies(p, key))
             .map((p) => {
-              const consumido = saidasDoMes
-                .filter((s) => normNome(s.nome) === normNome(p.nome))
-                .reduce((sum, s) => sum + s.valor, 0);
-              const restante = Math.max(0, (Number(p.valor) || 0) - consumido);
+              const casados = saidasDoMes.filter(
+                (s) => normNome(s.nome) === normNome(p.nome),
+              );
+              const consumido = casados.reduce((sum, s) => sum + s.valor, 0);
+              // Débito "total": qualquer lançamento com o mesmo nome no mês
+              // zera a provisão inteira, não importa o valor lançado. Padrão
+              // ("parcial", também pra provisões antigas sem o campo): só
+              // desconta o valor efetivamente lançado, aos poucos.
+              const restante =
+                p.debito === "total" && casados.length > 0
+                  ? 0
+                  : Math.max(0, (Number(p.valor) || 0) - consumido);
               return { item: p, consumido, restante };
             });
           const totalProvisoes = provisionsMonth.reduce(
@@ -3341,10 +3349,21 @@
         // era um <datalist> nativo (dropdown feio, sem como estilizar); agora é
         // o componente .ac-list (ver bindAutocomplete), com a mesma cara de
         // cartão/sombra do resto do app.
+        // Sem diferenciar maiúscula/minúscula: "luz" e "Luz" são o mesmo nome, e
+        // fica só a 1ª grafia da lista (quem vem antes vence — nos campos de
+        // lançamento a Provisão vem primeiro, ver AC_SOURCES).
+        function uniqCI(values) {
+          const seen = new Set();
+          return values.filter((v) => {
+            if (!v) return false;
+            const k = String(v).trim().toLowerCase();
+            if (!k || seen.has(k)) return false;
+            seen.add(k);
+            return true;
+          });
+        }
         function uniqSorted(values) {
-          return [...new Set(values.filter(Boolean))].sort((a, b) =>
-            a.localeCompare(b, "pt-BR"),
-          );
+          return uniqCI(values).sort((a, b) => a.localeCompare(b, "pt-BR"));
         }
         const AC_SOURCES = {
           "dl-receita": () => state.income.map((i) => i.nome),
@@ -3352,17 +3371,19 @@
           // também sugere os nomes cadastrados em Provisão — ajuda a digitar
           // EXATAMENTE igual ao que está lá, que é o que a Provisão usa pra
           // "casar" e descontar do valor provisionado (ver monthCompute).
+          // A Provisão vem primeiro: se o mesmo nome aparece escrito de outro
+          // jeito (luz/Luz), vale a grafia cadastrada na Provisão.
           "dl-despesa_fixa": () => [
-            ...state.fixed.map((i) => i.nome),
             ...state.provisions.map((p) => p.nome),
+            ...state.fixed.map((i) => i.nome),
           ],
           "dl-parcelamento": () => [
-            ...state.installments.map((i) => i.nome),
             ...state.provisions.map((p) => p.nome),
+            ...state.installments.map((i) => i.nome),
           ],
           "dl-cartoes": () => [
-            ...state.cardTx.map((t) => t.descricao),
             ...state.provisions.map((p) => p.nome),
+            ...state.cardTx.map((t) => t.descricao),
           ],
           // Campos "Terceiro": além dos nomes já usados no próprio módulo,
           // sempre inclui os nomes cadastrados em Settings > Compartilhamento
@@ -3464,6 +3485,11 @@
           if (!acList.hidden) acPosition();
         });
 
+        const PROVISAO_AC = new Set([
+          "dl-despesa_fixa",
+          "dl-parcelamento",
+          "dl-cartoes",
+        ]);
         function bindAutocomplete(root) {
           root.querySelectorAll("input[data-ac]").forEach((input) => {
             const getSource = AC_SOURCES[input.dataset.ac];
@@ -3497,6 +3523,22 @@
                 acClose();
               }
             });
+            // Nos campos de lançamento que "puxam" da Provisão: se o que foi
+            // digitado bate com um nome cadastrado sem diferenciar
+            // maiúscula/minúscula (luz → Luz), troca pela grafia cadastrada
+            // — assim o lançamento já sai com o nome exato da Provisão.
+            if (PROVISAO_AC.has(input.dataset.ac)) {
+              const canonicalize = () => {
+                const typed = input.value.trim().toLowerCase();
+                if (!typed) return;
+                const hit = uniqCI(getSource()).find(
+                  (v) => String(v).trim().toLowerCase() === typed,
+                );
+                if (hit && input.value !== hit) input.value = hit;
+              };
+              input.addEventListener("change", canonicalize);
+              input.addEventListener("blur", canonicalize);
+            }
             input.addEventListener("blur", () => {
               setTimeout(() => {
                 if (acInput === input) acClose();
@@ -4092,7 +4134,7 @@
           <div class="field"><label>Valor</label><input class="money js-valor" type="text" inputmode="decimal" name="valor" placeholder="0,00" required></div>
           <div class="field js-dep-wrap"><label>Dependentes</label><input class="small js-dep-input" type="number" step="1" min="0" name="dependentes" placeholder="0"></div>
           <div class="field"><label>Mês de início</label><input class="month" type="month" name="mesInicio" value="${state.month}" required></div>
-          <div class="field field-check"><label>Recorrente</label><label class="check-row"><input type="checkbox" name="recorrente" value="1" checked><span>Todo mês</span></label></div>
+          <div class="field field-check"><label>Recorrente</label><label class="check-row"><input type="checkbox" name="recorrente" value="1"><span>Todo mês</span></label></div>
           <button class="add" type="submit">Adicionar</button>
         </form>
         <div class="calc-preview js-calc-preview" hidden></div>
@@ -4108,9 +4150,9 @@
           <div class="field"><label>Terceiro</label><input type="text" name="pessoa" placeholder="Terceiro" data-ac="dl-pessoa-receita" required></div>
           <div class="field"><label>Lançamento</label><input type="text" name="nome" placeholder="Lançamento" data-ac="dl-receita" required></div>
           <div class="field"><label class="js-valor-label">Valor</label><input class="money" type="text" inputmode="decimal" name="valor" placeholder="0,00" required></div>
-          <div class="field field-check"><label>Recorrente</label><label class="check-row"><input type="checkbox" class="js-recorrente-check" name="recorrente" value="1" checked><span>Todo mês</span></label></div>
-          <div class="field js-parcelas-wrap" hidden><label>Qtd. parcelas</label><input class="small" type="number" min="1" name="totalParcelas" placeholder="—"></div>
-          <div class="field js-mesInicio-wrap" hidden><label>1ª parcela em</label><input class="month" type="month" name="mesInicio" value="${state.month}" required></div>
+          <div class="field field-check"><label>Recorrente</label><label class="check-row"><input type="checkbox" class="js-recorrente-check" name="recorrente" value="1"><span>Todo mês</span></label></div>
+          <div class="field js-parcelas-wrap"><label>Qtd. parcelas</label><input class="small" type="number" min="1" name="totalParcelas" placeholder="—"></div>
+          <div class="field js-mesInicio-wrap"><label>1ª parcela em</label><input class="month" type="month" name="mesInicio" value="${state.month}" required></div>
           <button class="add" type="submit">Adicionar</button>
         </form>
       </div>`;
@@ -4166,6 +4208,14 @@
             : base;
         }
 
+        // Como um lançamento com o mesmo nome debita a provisão: "parcial" (padrão)
+        // só desconta o valor lançado, aos poucos; "total" zera a provisão inteira
+        // assim que existir qualquer lançamento com esse nome no mês.
+        function provisaoDebitoField(atual) {
+          const total = atual === "total";
+          return `<div class="field"><label>Débito</label><select name="debito" title="Aos poucos: desconta só o valor lançado. Valor total: qualquer lançamento com esse nome zera a provisão."><option value="parcial" ${total ? "" : "selected"}>Aos poucos</option><option value="total" ${total ? "selected" : ""}>Valor total</option></select></div>`;
+        }
+
         function provisaoEditForm(i) {
           return `
     <tr>
@@ -4173,6 +4223,7 @@
         <form class="add-row" data-editform="provisao" data-editid="provisao:${i.id}">
           <div class="field"><label>Lançamento</label><input type="text" name="nome" value="${esc(i.nome)}" placeholder="Lançamento" data-ac="dl-provisao-lancamento" required></div>
           <div class="field"><label>Valor Provisionado</label><input class="money" type="text" inputmode="decimal" name="valor" value="${formatMoneyInput(i.valor)}" required></div>
+          ${provisaoDebitoField(i.debito)}
           ${editScopeRadios()}
           <button class="add" type="submit">Salvar</button>
           ${cancelBtn()}
@@ -4197,7 +4248,7 @@
                 ? provisaoEditForm(i)
                 : `
       <tr>
-        <td><span class="row-name">${esc(i.nome)}</span><div class="row-cat">${fixedRangeLabel(i)} · provisionado ${money(i.valor)}${consumido > 0 ? " − " + money(consumido) + " já lançado" : ""}</div></td>
+        <td><span class="row-name">${esc(i.nome)}</span><div class="row-cat">${fixedRangeLabel(i)} · provisionado ${money(i.valor)}${i.debito === "total" ? " · débito total" : ""}${consumido > 0 ? " − " + money(consumido) + " já lançado" : ""}</div></td>
         <td class="num" style="color:${restante > 0 ? "var(--good)" : "var(--bad)"};">${money(restante)}</td>
         <td><div class="row-actions"><button class="icon-btn" data-editrow="provisao:${i.id}" title="Editar">✎</button><button class="icon-btn" data-del="${delColl}:${i.id}" title="Remover">✕</button></div></td>
       </tr>`,
@@ -4274,7 +4325,7 @@
           <div class="field js-cotasTotais-wrap" hidden><label>Cotas Totais</label><input class="small" type="number" min="1" step="1" name="cotasTotais" placeholder="—"></div>
           <div class="field js-cotasPagas-wrap" hidden><label>Minhas Cotas</label><input class="small" type="number" min="0" step="1" name="cotasPagas" placeholder="—"></div>
           <div class="field"><label>Desde</label><input class="month" type="month" name="mesInicio" value="${state.month}" required></div>
-          <div class="field field-check"><label>Recorrente</label><label class="check-row"><input type="checkbox" name="recorrente" value="1" checked><span>Todo mês</span></label></div>
+          <div class="field field-check"><label>Recorrente</label><label class="check-row"><input type="checkbox" name="recorrente" value="1"><span>Todo mês</span></label></div>
           <button class="add" type="submit">Adicionar</button>
         </form>
         <div class="calc-preview js-calc-preview" hidden></div>
@@ -4294,7 +4345,7 @@
           <div class="field js-cotasTotais-wrap" hidden><label>Cotas Totais</label><input class="small" type="number" min="1" step="1" name="cotasTotais" placeholder="—"></div>
           <div class="field js-cotasPagas-wrap" hidden><label>Minhas Cotas</label><input class="small" type="number" min="0" step="1" name="cotasPagas" placeholder="—"></div>
           <div class="field"><label>Desde</label><input class="month" type="month" name="mesInicio" value="${state.month}" required></div>
-          <div class="field field-check"><label>Recorrente</label><label class="check-row"><input type="checkbox" name="recorrente" value="1" checked><span>Todo mês</span></label></div>
+          <div class="field field-check"><label>Recorrente</label><label class="check-row"><input type="checkbox" name="recorrente" value="1"><span>Todo mês</span></label></div>
           <button class="add" type="submit">Adicionar</button>
         </form>
         <div class="calc-preview js-calc-preview" hidden></div>
@@ -4330,7 +4381,7 @@
           const provisoesRows = c.provisionsMonth;
           const body = provisoesRows.length
             ? provisaoRowsHtml(provisoesRows, "full")
-            : `<tr><td colspan="3"><div class="empty"><b>Nenhuma provisão cadastrada</b>Reserve um valor mensal pra um lançamento (ex.: Gasolina) — todo lançamento com esse mesmo nome em Despesas fixas, Parcelamentos ou Cartões desconta desse valor automaticamente, sem passar de zero. O valor restante também aparece dentro de Despesas próprias.</div></td></tr>`;
+            : `<tr><td colspan="3"><div class="empty"><b>Nenhuma provisão cadastrada</b>Reserve um valor mensal pra um lançamento (ex.: Gasolina) — todo lançamento com esse mesmo nome em Despesas fixas, Parcelamentos ou Cartões desconta desse valor automaticamente, sem passar de zero — "Aos poucos" tira só o valor lançado (Gasolina 1.000 − 100 lançado = 900); "Valor total" zera a provisão inteira com qualquer lançamento (Água 500, lançou 100 = 0). O valor restante também aparece dentro de Despesas próprias.</div></td></tr>`;
 
           return `
       <div class="view-head"><h2>Provisão</h2></div>
@@ -4343,6 +4394,7 @@
         <form class="add-row" data-form="provisao">
           <div class="field"><label>Lançamento</label><input type="text" name="nome" placeholder="Lançamento" data-ac="dl-provisao-lancamento" required></div>
           <div class="field"><label>Valor Provisionado</label><input class="money" type="text" inputmode="decimal" name="valor" placeholder="0,00" required></div>
+          ${provisaoDebitoField("parcial")}
           <div class="field"><label>Desde</label><input class="month" type="month" name="mesInicio" value="${state.month}" required></div>
           <button class="add" type="submit">Adicionar</button>
         </form>
@@ -5235,6 +5287,7 @@
             provisao: (fd) => ({
               nome: fd.get("nome"),
               valor: parseMoney(fd.get("valor")),
+              debito: fd.get("debito") === "total" ? "total" : "parcial",
               mesInicio: fd.get("mesInicio"),
               mesFim: null,
               seriesId: uid(),
@@ -5370,6 +5423,7 @@
             provisao: (fd) => ({
               nome: fd.get("nome"),
               valor: parseMoney(fd.get("valor")),
+              debito: fd.get("debito") === "total" ? "total" : "parcial",
             }),
           };
           root.querySelectorAll("form[data-editform]").forEach((form) => {
