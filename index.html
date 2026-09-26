@@ -3878,7 +3878,13 @@
               -1,
               "card:" + x.card.id,
               x.txs.map((t) => ({
-                nome: t.tx.descricao + ` (${t.info.atual}/${t.info.total})`,
+                nome:
+                  t.tx.descricao +
+                  (t.tx.recorrente
+                    ? ""
+                    : t.info.total > 1
+                      ? ` (${t.info.atual}/${t.info.total})`
+                      : " (à vista)"),
                 valor: -t.tx.valorParcela,
                 sign: -1,
                 chip: situacaoChip(t.tx),
