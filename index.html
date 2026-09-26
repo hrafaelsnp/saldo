@@ -2127,6 +2127,13 @@
           return {
             doc: (path) => wrapDoc(path),
             collection: (path) => wrapColl(path),
+            // Rebusca no banco tudo que a tela está escutando (todas as
+            // coleções + o mês aberto) — usado ao voltar pro sistema, pra
+            // pegar o que mudou em outro aparelho mesmo sem o Realtime ligado.
+            refreshAll: () => {
+              docListeners.forEach((set) => set.forEach((fn) => fn()));
+              collListeners.forEach((set) => set.forEach((fn) => fn()));
+            },
           };
         }
 
@@ -2194,7 +2201,40 @@
           subscribeList("shares", "shares");
 
           watchMonth(state.month);
+          checkForUpdates();
         }
+
+        // Ao entrar (e sempre que voltar pra esta aba/janela): (1) rebusca todos
+        // os dados no banco, pra refletir o que mudou em outro aparelho; (2) se
+        // o próprio sistema (index.html) foi atualizado no servidor desde que
+        // esta página abriu, recarrega pra pegar a versão nova. O "carimbo" da
+        // versão é o ETag/Last-Modified do arquivo — se o servidor não mandar
+        // nenhum dos dois (ou abrindo direto do disco), só a parte dos dados roda.
+        let appSig = null;
+        let lastUpdateCheck = 0;
+        async function checkForUpdates() {
+          const now = Date.now();
+          if (now - lastUpdateCheck < 5000) return;
+          lastUpdateCheck = now;
+          if (state.db && state.db.refreshAll) state.db.refreshAll();
+          try {
+            const r = await fetch(location.href.split("#")[0], {
+              method: "HEAD",
+              cache: "no-store",
+            });
+            const sig = r.headers.get("etag") || r.headers.get("last-modified");
+            if (!sig) return;
+            if (appSig == null) appSig = sig;
+            else if (sig !== appSig) location.reload();
+          } catch (e) {}
+        }
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "visible" && state.db)
+            checkForUpdates();
+        });
+        window.addEventListener("focus", () => {
+          if (state.db) checkForUpdates();
+        });
 
         function showApp() {
           document.getElementById("loginScreen").hidden = true;
@@ -2969,6 +3009,13 @@
           if (item.mesFim && key > item.mesFim) return false;
           return true;
         }
+        // Valor da parcela num mês específico: se o valor foi alterado só
+        // naquele mês (item.overrides["AAAA-MM"]), vale ele; senão o valor
+        // padrão do parcelamento (valorParcela).
+        function instValor(item, key) {
+          const ov = item.overrides && item.overrides[key];
+          return ov != null ? ov : item.valorParcela;
+        }
         function installmentInfo(item, key) {
           const n = monthDiff(item.mesInicio, key) + 1;
           const total = Number(item.totalParcelas) || 1;
@@ -3101,7 +3148,7 @@
             .map((i) => ({ item: i, info: installmentInfo(i, key) }))
             .filter((x) => x.info);
           const totalInst = instItems.reduce(
-            (s, x) => s + val(x.item.id, Number(x.item.valorParcela) || 0),
+            (s, x) => s + val(x.item.id, Number(instValor(x.item, key)) || 0),
             0,
           );
           // Parcelamento com Terceiro (ex.: espelhado de um compartilhamento) —
@@ -3112,7 +3159,7 @@
           const instThird = instItems.filter((x) => x.item.pessoa);
           const instThirdByPessoa = groupByPessoa(
             instThird.map((x) =>
-              Object.assign({}, x.item, { valor: x.item.valorParcela, __info: x.info }),
+              Object.assign({}, x.item, { valor: instValor(x.item, key), __info: x.info }),
             ),
           );
 
@@ -3152,7 +3199,7 @@
             ...fixedThird.map((i) => ({ nome: i.nome, valor: Number(i.valor) || 0 })),
             ...instItems.map((x) => ({
               nome: x.item.nome,
-              valor: Number(x.item.valorParcela) || 0,
+              valor: Number(instValor(x.item, key)) || 0,
             })),
             ...cardsMonth.flatMap((cm) =>
               cm.txs.map((t) => ({
@@ -3190,7 +3237,7 @@
             })),
             ...instOwn.map((x) => ({
               id: x.item.id,
-              valor: val(x.item.id, Number(x.item.valorParcela) || 0),
+              valor: val(x.item.id, Number(instValor(x.item, key)) || 0),
             })),
             ...cardsWithTx.map((c) => ({
               id: "card:" + c.card.id,
@@ -3816,7 +3863,7 @@
             leaf(
               "Parcela",
               x.item.nome + ` (${x.info.atual}/${x.info.total})`,
-              -x.item.valorParcela,
+              -instValor(x.item, state.month),
               -1,
               x.item.id,
             ),
@@ -4408,7 +4455,7 @@
         <form class="add-row" data-editform="installments" data-editid="installments:${i.id}">
           ${withPessoa ? `<div class="field"><label>Terceiro</label><input type="text" name="pessoa" value="${esc(i.pessoa || "")}" placeholder="Terceiro" data-ac="dl-pessoa-parcelamento" required></div>` : ""}
           <div class="field"><label>Lançamento</label><input type="text" name="nome" value="${esc(i.nome)}" placeholder="Lançamento" data-ac="dl-parcelamento" required></div>
-          <div class="field"><label>Valor da parcela</label><input class="money" type="text" inputmode="decimal" name="valorParcela" value="${formatMoneyInput(i.valorParcela)}" required></div>
+          <div class="field"><label>Valor da parcela</label><input class="money" type="text" inputmode="decimal" name="valorParcela" value="${formatMoneyInput(instValor(i, state.month))}" required></div>
           <div class="field"><label>Qtd. parcelas</label><input class="small" type="number" min="1" name="totalParcelas" value="${i.totalParcelas}" required></div>
           <div class="field"><label>1ª parcela em</label><input class="month" type="month" name="mesInicio" value="${i.mesInicio}" required></div>
           <button class="add" type="submit">Salvar</button>
@@ -4438,7 +4485,7 @@
                     : `
       <tr>
         <td><span class="row-name">${esc(i.nome)}</span><div class="row-cat">${installmentStatusTxt(i)}</div></td>
-        <td class="num" style="color:var(--bad);">${money(i.valorParcela)}</td>
+        <td class="num" style="color:var(--bad);">${money(instValor(i, state.month))}</td>
         <td>${rowActions(`installments:${i.id}`, `installments:${i.id}`, i)}</td>
       </tr>`,
                 )
@@ -4449,7 +4496,7 @@
             (i) => i.pessoa && !isQuitadoParcela(i, state.month),
           );
           const groups = groupByPessoa(
-            thirds.map((i) => Object.assign({}, i, { valor: i.valorParcela })),
+            thirds.map((i) => Object.assign({}, i, { valor: instValor(i, state.month) })),
           );
           const thirdsBody = groups.length
             ? groups
@@ -5453,11 +5500,20 @@
                 }
               } else if (key === "installments") {
                 const item = state.installments.find((f) => f.id === id);
-                await state.db.doc(collFor[key] + "/" + id).update(data);
+                // O valor da parcela editado vale só pro mês em exibição
+                // (overrides[mês]); os demais campos (nome, qtd. parcelas,
+                // 1ª parcela) seguem valendo pro parcelamento todo.
+                const { valorParcela: novoValor, ...resto } = data;
+                const patch = Object.assign({}, resto, {
+                  overrides: Object.assign({}, item && item.overrides, {
+                    [state.month]: novoValor,
+                  }),
+                });
+                await state.db.doc(collFor[key] + "/" + id).update(patch);
                 await syncShareMirror(
                   collFor[key],
                   id,
-                  Object.assign({}, item, data),
+                  Object.assign({}, item, resto),
                 );
               } else {
                 await state.db.doc(collFor[key] + "/" + id).update(data);
