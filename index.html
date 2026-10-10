@@ -3033,6 +3033,23 @@
           }
           return installmentInfo(item, key);
         }
+        // Mesma ideia do instValor (Parcelamentos) aplicada ao lançamento de
+        // cartão: editar o valor só altera aquele mês (item.overrides["AAAA-MM"]),
+        // os demais meses continuam com o valor da parcela original.
+        function cardTxValor(item, key) {
+          const ov = item.overrides && item.overrides[key];
+          return ov != null ? ov : item.valorParcela;
+        }
+        // Situação (aguardando/verificado) por mês: marcar como verificado um
+        // mês não deve marcar os outros meses do mesmo lançamento recorrente/
+        // parcelado — cada mês guarda a própria situação em
+        // item.situacaoOverrides["AAAA-MM"], caindo pro campo global
+        // "situacao" (criado já como "aguardando") quando aquele mês ainda não
+        // foi alterado.
+        function cardTxSituacao(item, key) {
+          const ov = item.situacaoOverrides && item.situacaoOverrides[key];
+          return ov || item.situacao || "aguardando";
+        }
         // Um parcelamento fica "quitado" quando o número da parcela já passou do
         // total (diferente de "ainda não iniciado", que é antes da 1ª parcela) —
         // usado para sumir da tabela quando já foi pago por completo, mas continuar
@@ -3173,7 +3190,7 @@
               .map((t) => ({ tx: t, info: cardTxInfo(t, key) }))
               .filter((x) => x.info);
             const total = txs.reduce(
-              (s, x) => s + val(x.tx.id, Number(x.tx.valorParcela) || 0),
+              (s, x) => s + val(x.tx.id, Number(cardTxValor(x.tx, key)) || 0),
               0,
             );
             return { card: c, txs, total };
@@ -3204,7 +3221,7 @@
             ...cardsMonth.flatMap((cm) =>
               cm.txs.map((t) => ({
                 nome: t.tx.descricao,
-                valor: Number(t.tx.valorParcela) || 0,
+                valor: Number(cardTxValor(t.tx, key)) || 0,
               })),
             ),
           ];
@@ -3735,9 +3752,9 @@
           );
           return `<button class="pay-toggle ${allOn ? "on" : "off"}" data-paygroup="${ids.join(",")}">${allOn ? trueLabel : falseLabel}</button>`;
         }
-        function situacaoChip(tx) {
-          const verificado = tx.situacao === "verificado";
-          return `<button class="pay-toggle ${verificado ? "on" : "off"}" data-situacao="${tx.id}">${verificado ? "verificado" : "aguardando"}</button>`;
+        function situacaoChip(tx, key) {
+          const verificado = cardTxSituacao(tx, key) === "verificado";
+          return `<button class="pay-toggle ${verificado ? "on" : "off"}" data-situacao="${tx.id}:${key}">${verificado ? "verificado" : "aguardando"}</button>`;
         }
         function isEditing(coll, id) {
           return !!(
@@ -3885,9 +3902,9 @@
                     : t.info.total > 1
                       ? ` (${t.info.atual}/${t.info.total})`
                       : " (à vista)"),
-                valor: -t.tx.valorParcela,
+                valor: -cardTxValor(t.tx, state.month),
                 sign: -1,
-                chip: situacaoChip(t.tx),
+                chip: situacaoChip(t.tx, state.month),
                 id: t.tx.id,
               })),
             ),
@@ -4588,7 +4605,7 @@
               .map((t) => ({ tx: t, info: cardTxInfo(t, state.month) }))
               .filter((x) => x.info);
             const total = txs.reduce(
-              (s, x) => s + (Number(x.tx.valorParcela) || 0),
+              (s, x) => s + (Number(cardTxValor(x.tx, state.month)) || 0),
               0,
             );
             return { card: c, txs, total };
@@ -4607,7 +4624,7 @@
             <form class="add-row js-outros-form" data-editform="cardTx" data-editid="cardTx:${tx.id}">
               <input type="hidden" name="cardId" value="${tx.cardId}">
               <div class="field"><label>Lançamento</label><input type="text" name="descricao" value="${esc(tx.descricao)}" placeholder="Lançamento" data-ac="dl-cartoes" required></div>
-              <div class="field"><label class="js-valor-label">${tx.recorrente ? "Valor" : "Valor da parcela"}</label><input class="money" type="text" inputmode="decimal" name="valorParcela" value="${formatMoneyInput(tx.valorParcela)}" required></div>
+              <div class="field"><label class="js-valor-label">${tx.recorrente ? "Valor" : "Valor da parcela"}</label><input class="money" type="text" inputmode="decimal" name="valorParcela" value="${formatMoneyInput(cardTxValor(tx, state.month))}" required></div>
               <div class="field field-check"><label>Recorrente</label><label class="check-row"><input type="checkbox" class="js-recorrente-check" name="recorrente" value="1" ${tx.recorrente ? "checked" : ""}><span>Todo mês</span></label></div>
               <div class="field js-parcelas-wrap" ${tx.recorrente ? "hidden" : ""}><label>Qtd. parcelas</label><input class="small" type="number" min="1" name="totalParcelas" value="${tx.totalParcelas || 1}"></div>
               <div class="field js-mesInicio-wrap" ${tx.recorrente ? "hidden" : ""}><label>1ª parcela em</label><input class="month" type="month" name="mesInicio" value="${tx.mesInicio}" required></div>
@@ -4621,12 +4638,13 @@
                       : info.total > 1
                         ? `${info.atual}/${info.total}`
                         : "à vista";
+                    const situacaoAtual = cardTxSituacao(tx, state.month);
                     return `
-        <tr class="${tx.situacao === "verificado" ? "row-verificado" : ""}">
+        <tr class="${situacaoAtual === "verificado" ? "row-verificado" : ""}">
           <td><span class="row-name">${esc(tx.descricao)}</span></td>
           <td>${parcelaTxt}</td>
-          <td class="num" ${tx.situacao === "verificado" ? "" : 'style="color:var(--bad);"'}>${money(tx.valorParcela)}</td>
-          <td>${situacaoChip(tx)}</td>
+          <td class="num" ${situacaoAtual === "verificado" ? "" : 'style="color:var(--bad);"'}>${money(cardTxValor(tx, state.month))}</td>
+          <td>${situacaoChip(tx, state.month)}</td>
           <td><div class="row-actions"><button class="icon-btn" data-editrow="cardTx:${tx.id}" title="Editar">✎</button><button class="icon-btn" data-del="cardTx:${tx.id}" title="Remover">✕</button></div></td>
         </tr>`;
                   })
@@ -4885,14 +4903,18 @@
           });
           root.querySelectorAll("[data-situacao]").forEach((btn) => {
             btn.addEventListener("click", async () => {
-              const id = btn.dataset.situacao;
+              const [id, key] = btn.dataset.situacao.split(":");
               const tx = state.cardTx.find((x) => x.id === id);
               if (!tx) return;
               const novo =
-                tx.situacao === "verificado" ? "aguardando" : "verificado";
-              await state.db
-                .doc("cardTransactions/" + id)
-                .update({ situacao: novo });
+                cardTxSituacao(tx, key) === "verificado"
+                  ? "aguardando"
+                  : "verificado";
+              await state.db.doc("cardTransactions/" + id).update({
+                situacaoOverrides: Object.assign({}, tx.situacaoOverrides, {
+                  [key]: novo,
+                }),
+              });
             });
           });
           root.querySelectorAll("[data-rascunho]").forEach((cb) => {
@@ -5521,6 +5543,19 @@
                   id,
                   Object.assign({}, item, resto),
                 );
+              } else if (key === "cardTx") {
+                const item = state.cardTx.find((f) => f.id === id);
+                // Mesma ideia dos Parcelamentos: o valor da parcela editado
+                // vale só pro mês em exibição (overrides[mês]); os demais
+                // campos (lançamento, qtd. parcelas, 1ª parcela, recorrente)
+                // seguem valendo pro lançamento todo.
+                const { valorParcela: novoValor, ...resto } = data;
+                const patch = Object.assign({}, resto, {
+                  overrides: Object.assign({}, item && item.overrides, {
+                    [state.month]: novoValor,
+                  }),
+                });
+                await state.db.doc(collFor[key] + "/" + id).update(patch);
               } else {
                 await state.db.doc(collFor[key] + "/" + id).update(data);
               }
