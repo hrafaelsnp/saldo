@@ -361,6 +361,23 @@
         color: var(--ink);
         background: var(--surface-2);
       }
+      .dash-toggle {
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--ink-muted);
+        border-radius: 8px;
+        padding: 6px 10px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .dash-toggle:hover {
+        color: var(--ink);
+        background: var(--surface-2);
+      }
+      .dash-toggle.on {
+        background: var(--primary-soft);
+        color: var(--ink);
+      }
       .rascunho-toggle {
         display: flex;
         align-items: center;
@@ -558,6 +575,26 @@
         box-shadow: var(--shadow);
         margin-bottom: 18px;
         overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+      /* Formulário de inclusão no início do quadro (logo abaixo do título),
+         em todo o sistema: em vez de reordenar cada template, a ordem visual
+         é ajustada aqui — cabeçalho, depois o form (e o preview de cálculo
+         que vem colado nele), depois a tabela e o resto. Os forms de edição
+         (data-editform) ficam dentro das linhas da tabela e não são afetados. */
+      .card > .card-head {
+        order: -2;
+      }
+      .card > form.add-row[data-form],
+      .card > form.add-row[data-form] + .calc-preview {
+        order: -1;
+      }
+      .card:has(> .table-wrap) > form.add-row[data-form] {
+        border-bottom: 1px solid var(--border);
+      }
+      .card > form.add-row[data-form] + .calc-preview {
+        margin-top: 12px;
       }
       .card-head {
         display: flex;
@@ -1381,6 +1418,16 @@
             >
               ☾
             </button>
+            <button
+              class="dash-toggle on"
+              id="dashToggle"
+              type="button"
+              title="Ocultar dashboard"
+              aria-label="Mostrar/ocultar dashboard"
+              aria-pressed="true"
+            >
+              dashboard
+            </button>
             <button class="today-btn" id="gotoToday">hoje</button>
             <label class="rascunho-toggle" id="rascunhoWrap" title="Simular exclusão de lançamentos do cálculo do mês, sem alterá-los">
               <input type="checkbox" id="rascunhoToggle" /><span class="rascunho-label">rascunho</span>
@@ -1858,6 +1905,9 @@
           resumoOpen: {},
           pessoaGroupOpen: {},
           rascunho: false,
+          // Dashboard (tiles) visível ou não — de propósito não é salvo em
+          // lugar nenhum: o app sempre abre com o dashboard aparecendo.
+          showTiles: true,
           rascunhoOut: {},
           rascunhoValores: {},
           rascunhoPrevValores: {},
@@ -3697,6 +3747,11 @@
         function renderTiles() {
           const c = monthCompute(state.month);
           const tiles = document.getElementById("tiles");
+          tiles.hidden = !state.showTiles;
+          const dashBtn = document.getElementById("dashToggle");
+          dashBtn.classList.toggle("on", state.showTiles);
+          dashBtn.setAttribute("aria-pressed", String(state.showTiles));
+          dashBtn.title = state.showTiles ? "Ocultar dashboard" : "Mostrar dashboard";
           tiles.innerHTML = `
       <div class="tile good"><div class="label">Entradas</div><div class="value">${money(c.totalIncome)}</div><div class="sub">própria ${money(c.totalIncomeOwn)} · terceiros ${money(c.totalIncomeOther)}</div></div>
       <div class="tile bad"><div class="label">Saídas</div><div class="value">${money(c.totalSaidas)}</div><div class="sub">fixas ${money(c.totalFixed)} · parcelas ${money(c.totalInst)} · terceiros ${money(c.totalThirdParty)} · cartões ${money(c.totalCards)} · provisão ${money(c.totalProvisoes)}</div></div>
@@ -4126,12 +4181,10 @@
                 .join("")
             : `<tr><td colspan="3"><div class="empty"><b>Nenhuma receita cadastrada</b>Adicione o salário líquido e outras entradas recorrentes ou pontuais.</div></td></tr>`;
 
+          // Só o que vale no mês em exibição: um lançamento para Dez/2026 não
+          // aparece (nem soma no total do Terceiro) em Nov/2026.
           const others = state.income.filter(
-            (i) =>
-              i.pessoa &&
-              (i.totalParcelas
-                ? !isQuitadoParcela(i, state.month)
-                : fixedApplies(i, state.month)),
+            (i) => i.pessoa && incomeOtherInfo(i, state.month),
           );
           const groups = groupByPessoa(others);
           const othersBody = groups.length
@@ -4221,7 +4274,7 @@
           <div class="field"><label>Lançamento</label><input type="text" name="nome" placeholder="Lançamento" data-ac="dl-receita" required></div>
           <div class="field"><label class="js-valor-label">Valor</label><input class="money" type="text" inputmode="decimal" name="valor" placeholder="0,00" required></div>
           <div class="field field-check"><label>Recorrente</label><label class="check-row"><input type="checkbox" class="js-recorrente-check" name="recorrente" value="1"><span>Todo mês</span></label></div>
-          <div class="field js-parcelas-wrap"><label>Qtd. parcelas</label><input class="small" type="number" min="1" name="totalParcelas" placeholder="—"></div>
+          <div class="field js-parcelas-wrap"><label>Qtd. parcelas</label><input class="small" type="number" min="1" name="totalParcelas" placeholder="1" value="1"></div>
           <div class="field js-mesInicio-wrap"><label>1ª parcela em</label><input class="month" type="month" name="mesInicio" value="${state.month}" required></div>
           <button class="add" type="submit">Adicionar</button>
         </form>
@@ -5736,6 +5789,10 @@
             }
             renderAll();
           });
+        document.getElementById("dashToggle").addEventListener("click", () => {
+          state.showTiles = !state.showTiles;
+          renderTiles();
+        });
         document.getElementById("gotoToday").addEventListener("click", () => {
           state.month = todayKey();
           watchMonth(state.month);
