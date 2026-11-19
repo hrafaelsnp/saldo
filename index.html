@@ -4293,9 +4293,19 @@
           // (aguardando/verificado) do lançamento — cada um no sistema que já
           // existia pra ele, só reaproveitado aqui. Só entram parcelamentos de
           // verdade (mais de 2 parcelas) — à vista ou em até 2x não aparece.
+          // Some da tabela assim que a última parcela já passou (mesma regra
+          // de "quitado" das outras telas) — o consolidado é pra acompanhar o
+          // que ainda está rolando, não um histórico do que já terminou.
           const maisDe2x = (n) => (Number(n) || 1) > 2;
+          const naoQuitado = (item) => !isQuitadoParcela(item, state.month);
           const incomeRows = state.income
-            .filter((i) => i.pessoa && i.totalParcelas && maisDe2x(i.totalParcelas))
+            .filter(
+              (i) =>
+                i.pessoa &&
+                i.totalParcelas &&
+                maisDe2x(i.totalParcelas) &&
+                naoQuitado(i),
+            )
             .map((item) => ({
               id: item.id,
               nome: item.nome,
@@ -4309,7 +4319,7 @@
               cellKey: (k) => `inst:${item.id}:${k}`,
             }));
           const instRows = state.installments
-            .filter((item) => maisDe2x(item.totalParcelas))
+            .filter((item) => maisDe2x(item.totalParcelas) && naoQuitado(item))
             .map((item) => ({
               id: item.id,
               nome: item.nome,
@@ -4323,7 +4333,10 @@
               cellKey: (k) => `inst:${item.id}:${k}`,
             }));
           const cardRows = state.cardTx
-            .filter((tx) => !tx.recorrente && maisDe2x(tx.totalParcelas))
+            .filter(
+              (tx) =>
+                !tx.recorrente && maisDe2x(tx.totalParcelas) && naoQuitado(tx),
+            )
             .map((tx) => {
               const card = state.cards.find((c) => c.id === tx.cardId);
               return {
