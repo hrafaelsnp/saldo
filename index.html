@@ -664,6 +664,32 @@
       .table-wrap {
         overflow-x: auto;
       }
+      .consolidado-cell {
+        cursor: pointer;
+        font-family: "IBM Plex Mono";
+        font-size: 12px;
+        color: var(--ink-muted);
+      }
+      .consolidado-cell:hover {
+        background: var(--surface-2);
+      }
+      .consolidado-entrada {
+        color: var(--good);
+      }
+      .consolidado-saida {
+        color: var(--bad);
+      }
+      .consolidado-pago.consolidado-entrada {
+        background: var(--good-soft);
+        font-weight: 600;
+      }
+      .consolidado-pago.consolidado-saida {
+        background: var(--bad-soft);
+        font-weight: 600;
+      }
+      .consolidado-table tbody tr:nth-child(even) {
+        background: var(--surface-2);
+      }
 
       .chip {
         display: inline-flex;
@@ -1075,6 +1101,12 @@
       @media (max-width: 860px) {
         .menu-toggle {
           display: flex;
+        }
+        /* Consolidado parcelamento é uma tabela larga (1 coluna por mês) —
+           só faz sentido em tela de desktop; em mobile a aba some (o JS
+           também força a aba "Geral" nesse caso, ver viewResumo). */
+        [data-tabgroup="resumo"] [data-tabkey="parcelamento"] {
+          display: none;
         }
         /* Abaixo de 860px a barra lateral vira uma gaveta fixa, fora do fluxo
            (não empurra mais o conteúdo pra baixo) — some deslizando pra fora
@@ -1912,6 +1944,8 @@
           rascunhoValores: {},
           rascunhoPrevValores: {},
           tabs: {},
+          consolidadoYear: Number(addMonths(todayKey(), 1).slice(0, 4)),
+          yearPagamentos: {},
           editing: null,
           undo: null,
           clearSelected: {},
@@ -2871,8 +2905,8 @@
           });
         }
 
-        async function patchPagamentos(patch) {
-          const key = "months/" + state.month;
+        async function patchPagamentos(patch, monthOverride) {
+          const key = "months/" + (monthOverride || state.month);
           const ref = state.db.doc(key);
           const snap = await ref.get();
           if (!snap.exists) {
@@ -2886,6 +2920,40 @@
             state.monthDoc.pagamentos && state.monthDoc.pagamentos[itemId]
           );
           await patchPagamentos({ [itemId]: !cur });
+        }
+        // Consolidado parcelamento: toggle de "pago" numa célula específica do
+        // ano (mês diferente do mês em exibição) — mesma ideia do togglePago,
+        // mas lendo/escrevendo no "months/{mês da célula}" em vez de
+        // state.month, usando o cache de state.yearPagamentos (ver
+        // watchYearPagamentos) pra saber o status atual.
+        async function togglePagoFor(monthKeyTarget, itemId) {
+          const cur = !!(
+            state.yearPagamentos[monthKeyTarget] &&
+            state.yearPagamentos[monthKeyTarget][itemId]
+          );
+          await patchPagamentos({ [itemId]: !cur }, monthKeyTarget);
+        }
+        // Mantém os 12 documentos "months/{ano}-{mês}" do ano escolhido em
+        // state.yearPagamentos, pra conseguir mostrar/alternar o status de
+        // pago de qualquer mês do ano na tabela consolidada, sem precisar
+        // trocar o mês em exibição no resto do app. Só fica ativo enquanto a
+        // aba "Consolidado parcelamento" está sendo mostrada (ver
+        // viewConsolidadoParcelamento).
+        let unwatchYearPagamentos = [];
+        function watchYearPagamentos(year) {
+          unwatchYearPagamentos.forEach((fn) => fn());
+          unwatchYearPagamentos = [];
+          state.yearPagamentos = {};
+          for (let m = 1; m <= 12; m++) {
+            const key = monthKey(year, m);
+            unwatchYearPagamentos.push(
+              state.db.doc("months/" + key).onSnapshot((snap) => {
+                state.yearPagamentos[key] =
+                  (snap.exists && snap.data().pagamentos) || {};
+                renderViews();
+              }),
+            );
+          }
         }
         async function toggleGroupPago(ids) {
           const allOn = ids.every(
@@ -3843,6 +3911,36 @@
       </div>`;
         }
 
+        // Ids de todos os "chips" de situação mostrados na aba Geral do Resumo
+        // que usam o mapa months/{mês}.pagamentos (payChip/receivedChip) — ou
+        // seja, status GERAL do mês, separado de propósito do status de cada
+        // lançamento de cartão (aguardando/verificado, mostrado e marcado só
+        // na tela Cartões): "card:<id>" aqui é o status da FATURA inteira
+        // (mostrado no cabeçalho do grupo "Cartão" do Resumo, que alimenta
+        // "Falta pagar"), não o de cada compra. Marcar/desmarcar tudo no
+        // Resumo nunca mexe no status individual de um lançamento de cartão,
+        // e marcar/desmarcar um lançamento em Cartões nunca mexe neste mapa —
+        // são dois controles independentes.
+        function geralSituacaoIds() {
+          const c = monthCompute(state.month);
+          const ids = [];
+          c.incomeOwn.forEach((i) => ids.push(i.id));
+          mergeTerceirosByPessoa(
+            c.incomeOtherByPessoa,
+            c.fixedThirdByPessoa,
+            c.instThirdByPessoa,
+          ).forEach((m) => {
+            m.incomeItens.forEach((i) => ids.push(i.id));
+            m.fixedItens.forEach((i) => ids.push(i.id));
+            m.instItens.forEach((i) => ids.push(i.id));
+          });
+          c.fixedOwn.forEach((i) => ids.push(i.id));
+          c.instOwn.forEach((x) => ids.push(x.item.id));
+          c.cardsWithTx.forEach((x) => ids.push("card:" + x.card.id));
+          c.provisionsMonth.forEach((p) => ids.push(p.item.id));
+          return ids.filter(Boolean);
+        }
+
         function viewResumo() {
           const c = monthCompute(state.month);
           const leaf = (tipo, nome, valor, sign, id) => ({
@@ -4129,13 +4227,192 @@
                 .join("")
             : `<tr><td colspan="${colspan}"><div class="empty"><b>Nada lançado ainda para ${monthLabel(state.month)}</b>Cadastre receitas, despesas fixas ou parcelamentos nas outras seções — eles aparecem aqui automaticamente.</div></td></tr>`;
 
-          return `
-      <div class="view-head"><h2>Resumo — ${monthLabel(state.month)}</h2></div>
+          const situacaoIds = geralSituacaoIds();
+          const hasSituacoes = situacaoIds.length > 0;
+          const allSituacoesOn =
+            hasSituacoes &&
+            situacaoIds.every(
+              (id) =>
+                !!(state.monthDoc.pagamentos && state.monthDoc.pagamentos[id]),
+            );
+          const geralPanel = `
       <div class="card">
-        <div class="card-head"><h3>Lançamentos do mês</h3><span class="meta">${itemCount} ${itemCount === 1 ? "item" : "itens"}</span></div>
+        <div class="card-head">
+          <h3>Lançamentos do mês</h3>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span class="meta">${itemCount} ${itemCount === 1 ? "item" : "itens"}</span>
+            ${
+              hasSituacoes
+                ? `<button type="button" class="pay-toggle ${allSituacoesOn ? "on" : "off"}" data-situacaoall="${allSituacoesOn ? "off" : "on"}">${allSituacoesOn ? "Desmarcar tudo" : "Marcar tudo"}</button>`
+                : ""
+            }
+          </div>
+        </div>
         <div class="table-wrap"><table class="${draftMode ? "rascunho-mode" : ""}">
           <thead><tr>${draftMode ? '<th class="rascunho-cell"></th>' : ""}<th>Item</th><th class="num">Valor</th><th>Situação</th></tr></thead>
           <tbody>${body}</tbody>
+        </table></div>
+      </div>`;
+
+          // Consolidado parcelamento é uma tabela larga (1 coluna por mês) —
+          // não cabe bem numa tela de celular, então só aparece em telas de
+          // desktop (> 860px, mesmo corte usado pro resto do layout
+          // responsivo). Em mobile a aba some (ver CSS) e a tela sempre
+          // mostra "Geral", mesmo que o usuário tivesse deixado a outra aba
+          // selecionada numa sessão anterior em desktop.
+          const isDesktop = window.innerWidth > 860;
+          const rtb = tabBar("resumo", [
+            { key: "geral", label: "Geral" },
+            { key: "parcelamento", label: "Consolidado parcelamento" },
+          ]);
+          const activeTab = isDesktop ? rtb.active : "geral";
+          return `
+      <div class="view-head"><h2>Resumo — ${monthLabel(state.month)}</h2></div>
+      ${rtb.html}
+      ${activeTab === "parcelamento" ? viewConsolidadoParcelamento() : geralPanel}`;
+        }
+
+        // Consolidado parcelamento: tabela com um parcelamento (ou lançamento de
+        // cartão parcelado) por linha e um mês por coluna (ano inteiro), igual à
+        // planilha que o Rafael já usava — cada célula mostra "parcela
+        // atual/total" (ex.: 03/12) no mês em que ela cai, e vira "pago" quando
+        // marcada (clicando na própria célula). Meses em que tudo já está pago
+        // somem da tabela, pra sobrar só o que ainda precisa de acompanhamento.
+        function viewConsolidadoParcelamento() {
+          const year = state.consolidadoYear;
+          if (state._watchedYear !== year) {
+            watchYearPagamentos(year);
+            state._watchedYear = year;
+          }
+          const allCols = [];
+          for (let m = 1; m <= 12; m++) allCols.push(monthKey(year, m));
+
+          // Parcelamentos e receitas de Terceiro parceladas usam o mapa de
+          // pagamentos por mês (months/{mês}, via state.yearPagamentos);
+          // lançamentos de cartão parcelados usam a própria situação
+          // (aguardando/verificado) do lançamento — cada um no sistema que já
+          // existia pra ele, só reaproveitado aqui. Só entram parcelamentos de
+          // verdade (mais de 2 parcelas) — à vista ou em até 2x não aparece.
+          const maisDe2x = (n) => (Number(n) || 1) > 2;
+          const incomeRows = state.income
+            .filter((i) => i.pessoa && i.totalParcelas && maisDe2x(i.totalParcelas))
+            .map((item) => ({
+              id: item.id,
+              nome: item.nome,
+              tag: item.pessoa || "",
+              tipo: "entrada",
+              infoFor: (k) => installmentInfo(item, k),
+              pagoFor: (k) =>
+                !!(
+                  state.yearPagamentos[k] && state.yearPagamentos[k][item.id]
+                ),
+              cellKey: (k) => `inst:${item.id}:${k}`,
+            }));
+          const instRows = state.installments
+            .filter((item) => maisDe2x(item.totalParcelas))
+            .map((item) => ({
+              id: item.id,
+              nome: item.nome,
+              tag: item.pessoa || "",
+              tipo: "saida",
+              infoFor: (k) => installmentInfo(item, k),
+              pagoFor: (k) =>
+                !!(
+                  state.yearPagamentos[k] && state.yearPagamentos[k][item.id]
+                ),
+              cellKey: (k) => `inst:${item.id}:${k}`,
+            }));
+          const cardRows = state.cardTx
+            .filter((tx) => !tx.recorrente && maisDe2x(tx.totalParcelas))
+            .map((tx) => {
+              const card = state.cards.find((c) => c.id === tx.cardId);
+              return {
+                id: tx.id,
+                nome: tx.descricao,
+                tag: card ? "Cartão: " + card.nome : "Cartão",
+                tipo: "saida",
+                infoFor: (k) => cardTxInfo(tx, k),
+                pagoFor: (k) => cardTxSituacao(tx, k) === "verificado",
+                cellKey: (k) => `card:${tx.id}:${k}`,
+              };
+            });
+          const sortRows = (list) =>
+            list
+              .filter((r) => allCols.some((k) => r.infoFor(k)))
+              .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+          const entradaRows = sortRows(incomeRows);
+          const saidaRows = sortRows([...instRows, ...cardRows]);
+          const allRows = [...entradaRows, ...saidaRows];
+
+          // Esconde um mês só quando tem pelo menos uma parcela nele E todas já
+          // estão pagas — um mês sem nenhuma parcela continua aparecendo
+          // normalmente (não tem o que "estar tudo pago").
+          const cols = allCols.filter((k) => {
+            let any = false;
+            let allPaid = true;
+            for (const r of allRows) {
+              const info = r.infoFor(k);
+              if (!info) continue;
+              any = true;
+              if (!r.pagoFor(k)) allPaid = false;
+            }
+            return !(any && allPaid);
+          });
+
+          const headerCells = cols
+            .map((k) => {
+              const { y, m } = parseKey(k);
+              return `<th style="text-align:center;">${MONTH_NAMES[m - 1].toLowerCase()}/${y}</th>`;
+            })
+            .join("");
+
+          const rowHtml = (r) => {
+            const cells = cols
+              .map((k) => {
+                const info = r.infoFor(k);
+                if (!info) return `<td style="text-align:center;"></td>`;
+                const pago = r.pagoFor(k);
+                const label = pad2(info.atual) + "/" + pad2(info.total);
+                const tipoClass =
+                  r.tipo === "entrada"
+                    ? "consolidado-entrada"
+                    : "consolidado-saida";
+                return `<td class="consolidado-cell ${tipoClass}${pago ? " consolidado-pago" : ""}" style="text-align:center;" data-consolidadocell="${r.cellKey(k)}" title="Clique para marcar/desmarcar como pago">${label}</td>`;
+              })
+              .join("");
+            const tag = r.tag
+              ? `<div class="row-cat">${esc(r.tag)}</div>`
+              : "";
+            return `<tr><td><span class="row-name">${esc(r.nome)}</span>${tag}</td>${cells}</tr>`;
+          };
+          const sectionHead = (label) =>
+            `<tr class="resumo-head"><td colspan="${cols.length + 1}">${label}</td></tr>`;
+
+          const bodyRows = allRows.length
+            ? [
+                ...(entradaRows.length
+                  ? [sectionHead("Entradas"), ...entradaRows.map(rowHtml)]
+                  : []),
+                ...(saidaRows.length
+                  ? [sectionHead("Saídas"), ...saidaRows.map(rowHtml)]
+                  : []),
+              ].join("")
+            : `<tr><td colspan="${cols.length + 1}"><div class="empty"><b>Nenhum parcelamento cadastrado</b>Cadastre em Receitas, Despesas &gt; Parcelamentos ou Cartões para ver o consolidado do ano aqui.</div></td></tr>`;
+
+          return `
+      <div class="card">
+        <div class="card-head" style="display:flex; align-items:center; justify-content:space-between;">
+          <h3>Consolidado parcelamento</h3>
+          <div class="month-switch">
+            <button type="button" data-consolidadoyear="-1" aria-label="Ano anterior">‹</button>
+            <div class="month-label" style="min-width:56px;">${year}</div>
+            <button type="button" data-consolidadoyear="1" aria-label="Próximo ano">›</button>
+          </div>
+        </div>
+        <div class="view-sub" style="padding:0 16px 10px;">Clique numa célula para marcar/desmarcar aquela parcela como paga. Meses com tudo pago não aparecem.</div>
+        <div class="table-wrap"><table class="consolidado-table">
+          <thead><tr><th>Item</th>${headerCells}</tr></thead>
+          <tbody>${bodyRows}</tbody>
         </table></div>
       </div>`;
         }
@@ -4990,6 +5267,18 @@
               renderAll();
             });
           });
+          root.querySelectorAll("[data-situacaoall]").forEach((btn) => {
+            btn.addEventListener("click", async () => {
+              const turnOn = btn.dataset.situacaoall === "on";
+              const ids = geralSituacaoIds();
+              if (!ids.length) return;
+              const patch = {};
+              ids.forEach((id) => {
+                patch[id] = turnOn;
+              });
+              await patchPagamentos(patch);
+            });
+          });
           root.querySelectorAll("[data-resumogroup]").forEach((btn) => {
             btn.addEventListener("click", () => {
               const key = btn.dataset.resumogroup;
@@ -5009,6 +5298,32 @@
               const group = btn.closest("[data-tabgroup]").dataset.tabgroup;
               state.tabs[group] = btn.dataset.tabkey;
               renderViews();
+            });
+          });
+          root.querySelectorAll("[data-consolidadoyear]").forEach((btn) => {
+            btn.addEventListener("click", () => {
+              state.consolidadoYear += Number(btn.dataset.consolidadoyear);
+              renderViews();
+            });
+          });
+          root.querySelectorAll("[data-consolidadocell]").forEach((td) => {
+            td.addEventListener("click", async () => {
+              const [type, id, key] = td.dataset.consolidadocell.split(":");
+              if (type === "card") {
+                const tx = state.cardTx.find((x) => x.id === id);
+                if (!tx) return;
+                const novo =
+                  cardTxSituacao(tx, key) === "verificado"
+                    ? "aguardando"
+                    : "verificado";
+                await state.db.doc("cardTransactions/" + id).update({
+                  situacaoOverrides: Object.assign({}, tx.situacaoOverrides, {
+                    [key]: novo,
+                  }),
+                });
+              } else {
+                await togglePagoFor(key, id);
+              }
             });
           });
           const map = {
@@ -5768,6 +6083,15 @@
         window.addEventListener("resize", () => {
           if (window.innerWidth > 860) setSidebarOpen(false);
         });
+        // Se a tela cruzar o corte de 860px com o Resumo aberto, re-renderiza
+        // pra aplicar/tirar a trava do Consolidado parcelamento (ver
+        // viewResumo) sem precisar trocar de aba manualmente.
+        window.addEventListener(
+          "resize",
+          debounce(() => {
+            if (state.section === "resumo") renderViews();
+          }, 150),
+        );
         document.getElementById("prevMonth").addEventListener("click", () => {
           state.month = addMonths(state.month, -1);
           watchMonth(state.month);
